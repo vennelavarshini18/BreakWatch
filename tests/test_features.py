@@ -437,3 +437,4 @@ def test_days_since_rain_capped_at_lookback():
     s = pd.Series([v for _, v in pairs], index=pd.to_datetime([d for d, _ in pairs]))
     result = days_since_rain_gt_2p5mm(s, as_of, lookback=60)
     assert result == 60
+
