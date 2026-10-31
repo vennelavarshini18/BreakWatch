@@ -1,0 +1,5 @@
+pystac-client
+planetary-computer
+odc-stac
+rioxarray
+xarray

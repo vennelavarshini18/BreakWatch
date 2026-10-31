@@ -1,0 +1,15 @@
+fastapi
+uvicorn
+pydantic
+langgraph
+httpx
+tenacity
+shapely
+pyproj
+numpy
+pandas
+scipy
+anthropic
+pytest
+ruff
+python-dotenv

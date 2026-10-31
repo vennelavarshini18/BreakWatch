@@ -1,0 +1,7 @@
+{
+  "name": "BreakWatch model card",
+  "version": "0.1",
+  "status": "placeholder",
+  "training_window": "2015-2025",
+  "notes": "This file is committed as a reference for model metadata and will be replaced with the trained asset during later stages."
+}
