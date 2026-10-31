@@ -72,7 +72,7 @@ _default_ledger = Ledger()
 def run_ledger(ledger: Ledger | None = None):
     """Use a ledger for the current context. Call from the main thread or use contextvars.copy_context().run."""
     previous = current_ledger.get()
-    active = ledger or Ledger()
+    active = ledger if ledger is not None else (_default_ledger if previous is None else previous)
     token = current_ledger.set(active)
     try:
         yield active

@@ -73,12 +73,13 @@ def verify_claim(claim: Claim, evidence_lookup: dict[str, object], passage_looku
             raw = getattr(evidence, "value", None)
             if raw is None:
                 continue
+            candidates: list[str]
             if isinstance(raw, str):
                 candidates = [raw]
             elif isinstance(raw, (int, float)):
-                candidates = [str(raw)]
+                candidates = [str(raw), format(float(raw), "g")]
             else:
-                candidates = [str(raw)]
+                candidates = [str(raw), format(float(raw), "g")]
             for candidate in candidates:
                 if _matches_value(num, candidate, str(num)):
                     matched = True
@@ -88,9 +89,11 @@ def verify_claim(claim: Claim, evidence_lookup: dict[str, object], passage_looku
         if not matched:
             for chunk_id in claim.chunk_ids:
                 passage_text = passage_lookup.get(chunk_id)
-                if passage_text and str(num) in passage_text:
-                    matched = True
-                    break
+                if passage_text:
+                    normalized = _strip_iso_dates(passage_text)
+                    if str(num) in normalized or format(float(num), "g") in normalized:
+                        matched = True
+                        break
         if not matched:
             issues.append(f"number not traceable: {num}")
     return (not issues, issues)
