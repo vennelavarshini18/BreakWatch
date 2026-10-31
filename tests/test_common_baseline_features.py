@@ -92,18 +92,20 @@ def test_build_features_is_stable_when_future_rows_are_appended():
             'sm_root': [0.20, 0.21, 0.22, 0.23, 0.24, 0.25, 0.26, 0.27, 0.28, 0.29],
         }
     )
+    # MODIS ndvi with start_date / end_date columns (D5 contract)
     ndvi = pd.DataFrame(
         {
-            'day': [date(2023, 12, 20), date(2024, 1, 5)],
+            'start_date': [date(2023, 12, 5), date(2023, 12, 21)],
+            'end_date':   [date(2023, 12, 20), date(2024, 1, 5)],
             'ndvi': [0.5, 0.55],
         }
     )
-    base = build_features(as_of, weather, ndvi)
+    base = build_features(weather, ndvi, as_of)  # (weather_daily, modis_ndvi, as_of)
     weather_future = pd.concat([
         weather,
         pd.DataFrame([{'day': date(2024, 1, 11), 'precip_mm': 5.0, 'et0_mm': 2.1, 'tmax_c': 31.0, 'sm_shallow': 0.30, 'sm_root': 0.31}])
     ], ignore_index=True)
-    future = build_features(as_of, weather_future, ndvi)
+    future = build_features(weather_future, ndvi, as_of)
     assert base == future
     assert 'doy_sin' in FEATURE_NAMES
 
@@ -115,9 +117,9 @@ def test_all_feature_names_are_present():
         'sm_shallow_pctl',
         'sm_root_pctl',
         'ndvi_z',
-        'ndvi_z_slope3',
-        'et0_14d_mm',
-        'tmax_7d_mean_c',
+        'ndvi_z_slope_3comp',
+        'et0_sum_14d',
+        'tmax_mean_7d',
         'doy_sin',
         'doy_cos',
     )
