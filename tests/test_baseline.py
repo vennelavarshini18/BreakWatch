@@ -285,3 +285,4 @@ def test_rain_normal_14d_empty_returns_none():
     target = dt.date(2024, 6, 15)
     s = pd.Series([], dtype=float)
     assert rain_normal_14d(s, target) is None
+
