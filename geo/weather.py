@@ -1,0 +1,410 @@
+"""geo/weather.py - Open-Meteo weather, ensemble and climatology (P1).
+
+Replay : archive endpoint only, days <= as_of, no forecast rows, no ensemble.
+Live   : archive (settled past) + forecast endpoint (recent gap + 16 forecast days) + ensemble (14 days).
+          In live mode the as_of day itself is marked is_forecast=True (today's day is not complete yet),
+          which gives 16 forecast rows (as_of .. as_of+15).
+Never reads the system date. CLI "--as-of today" goes through api.clock.today_utc().
+
+Evidence: one row per (source, is_forecast) group of daily rows (WeatherDay.evidence_id points to it), plus one
+row per derived climatology number. ids are "geo_001"... (P3's Ledger re-stamps/merges them).
+"""
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field as dc_field
+from typing import Optional
+
+from shapely.geometry import shape
+
+from contracts import Climatology, Evidence, WeatherDay
+from geo.http import IMMUTABLE_TTL_S, ApiError, NetworkUnavailable, get_json
+
+ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
+FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
+ENSEMBLE_URL = "https://ensemble-api.open-meteo.com/v1/ensemble"
+ENSEMBLE_MODEL = "ecmwf_ifs025"
+TZ = "Asia/Kolkata"
+
+DAILY_VARS = "precipitation_sum,et0_fao_evapotranspiration,temperature_2m_max"
+HOURLY_SM = "soil_moisture_0_to_7cm,soil_moisture_7_to_28cm,soil_moisture_28_to_100cm"
+INDIA_BBOX = (68.0, 6.0, 98.0, 38.0)          # lon_min, lat_min, lon_max, lat_max
+ARCHIVE_LAG_DAYS = 11                          # live: archive up to as_of-11, forecast endpoint (past_days=10) after
+FORECAST_PAST_DAYS = 10
+FORECAST_DAYS = 16
+ENSEMBLE_DAYS = 14
+CLIM_FIRST_YEAR = 2010
+RAIN_THRESHOLD_MM = 2.5
+REPLAY_TTL_S = 24 * 3600
+_D = dt.timedelta
+
+
+@dataclass
+class WeatherBundle:
+    days: list[WeatherDay]
+    evidence: list[Evidence]
+    events: list[str]
+    rain_ensemble: list[list[float]] = dc_field(default_factory=list)
+    climatology: Climatology = dc_field(default_factory=Climatology)
+    lat: float = 0.0
+    lon: float = 0.0
+
+
+class EvidenceFactory:
+    def __init__(self, prefix: str = "geo"):
+        self.prefix, self.n, self.rows = prefix, 0, []
+
+    def make(self, key, value, source, fetched_at, quality, unit=None, obs_date=None, note=None) -> Evidence:
+        self.n += 1
+        ev = Evidence(id=f"{self.prefix}_{self.n:03d}", key=key, value=value, unit=unit, source=source,
+                      fetched_at=fetched_at, obs_date=obs_date, quality=quality, note=note)
+        self.rows.append(ev)
+        return ev
+
+
+# ---------------------------------------------------------------- geometry
+def check_india(lat: float, lon: float) -> None:
+    lo, la, hi, ha = INDIA_BBOX
+    if not (lo <= lon <= hi and la <= lat <= ha):
+        raise ValueError(f"location ({lat:.4f}, {lon:.4f}) is outside India")
+
+
+def centroid_of(polygon: dict) -> tuple[float, float]:
+    try:
+        geom = shape(polygon)
+    except Exception as e:
+        raise ValueError(f"invalid polygon: {e}")
+    if geom.is_empty or geom.geom_type != "Polygon":
+        raise ValueError("expected a non-empty GeoJSON Polygon")
+    c = geom.centroid
+    check_india(c.y, c.x)
+    return c.y, c.x
+
+
+# ---------------------------------------------------------------- parsing
+def _f(x) -> Optional[float]:
+    return None if x is None else float(x)
+
+
+def parse_openmeteo(js: dict) -> dict[dt.date, dict]:
+    """-> {day: {precip, et0, tmax, sm0, sm7, sm28}}; hourly soil moisture averaged per day (>=12 valid hours)."""
+    out: dict[dt.date, dict] = {}
+    d = js.get("daily") or {}
+    for i, t in enumerate(d.get("time", [])):
+        rec = out.setdefault(dt.date.fromisoformat(t), {})
+        for src, dst in (("precipitation_sum", "precip"), ("et0_fao_evapotranspiration", "et0"),
+                         ("temperature_2m_max", "tmax")):
+            vals = d.get(src)
+            rec[dst] = _f(vals[i]) if vals and i < len(vals) else None
+    h = js.get("hourly") or {}
+    times = h.get("time", [])
+    for src, dst in (("soil_moisture_0_to_7cm", "sm0"), ("soil_moisture_7_to_28cm", "sm7"),
+                     ("soil_moisture_28_to_100cm", "sm28")):
+        vals = h.get(src)
+        if not vals:
+            continue
+        acc: dict[str, list[float]] = {}
+        for t, v in zip(times, vals):
+            if v is not None:
+                acc.setdefault(t[:10], []).append(float(v))
+        for day_s, lst in acc.items():
+            if len(lst) >= 12:
+                out.setdefault(dt.date.fromisoformat(day_s), {})[dst] = sum(lst) / len(lst)
+    return out
+
+
+def _sm_root(rec: dict) -> Optional[float]:
+    a, b = rec.get("sm7"), rec.get("sm28")
+    return None if a is None or b is None else (a + b) / 2.0
+
+
+def _has_data(rec: dict) -> bool:
+    return any(rec.get(k) is not None for k in ("precip", "et0", "tmax", "sm0", "sm7", "sm28"))
+
+
+def parse_ensemble(js: dict, as_of: dt.date, n_days: int) -> list[list[float]]:
+    """Hourly precipitation per member -> [member][day] daily totals for as_of .. as_of+n_days-1.
+    Members with missing hours are dropped (never filled)."""
+    h = js.get("hourly") or {}
+    times = h.get("time", [])
+    wanted = [(as_of + _D(days=i)).isoformat() for i in range(n_days)]
+    members: list[list[float]] = []
+    for key, vals in h.items():
+        if key == "time" or not key.startswith("precipitation"):
+            continue
+        per_day: dict[str, list] = {}
+        for t, v in zip(times, vals):
+            per_day.setdefault(t[:10], []).append(v)
+        series, ok = [], True
+        for d in wanted:
+            lst = per_day.get(d)
+            if not lst or len(lst) < 24 or any(v is None for v in lst):
+                ok = False
+                break
+            series.append(round(sum(lst), 3))
+        if ok:
+            members.append(series)
+    return members
+
+
+# ---------------------------------------------------------------- fetching
+def _fetch_segment(url: str, lat: float, lon: float, extra: dict, ttl_s: int):
+    params = {"latitude": round(lat, 4), "longitude": round(lon, 4), "daily": DAILY_VARS,
+              "hourly": HOURLY_SM, "timezone": TZ, **extra}
+    js, quality, fetched_at, events = get_json(url, params, ttl_s)
+    return parse_openmeteo(js), quality, fetched_at, events
+
+
+def _collect_days(lat, lon, as_of, mode, lookback_days, events):
+    start = as_of - _D(days=lookback_days - 1)
+    merged: dict[dt.date, tuple] = {}              # day -> (rec, source, quality, fetched_at)
+
+    arch_end = as_of if mode == "replay" else as_of - _D(days=ARCHIVE_LAG_DAYS)
+    immutable = arch_end <= as_of - _D(days=10)
+    ttl = IMMUTABLE_TTL_S if immutable else (REPLAY_TTL_S if mode == "replay" else 0)
+    try:
+        recs, q, fa, ev = _fetch_segment(ARCHIVE_URL, lat, lon,
+                                         {"start_date": start.isoformat(), "end_date": arch_end.isoformat()}, ttl)
+        events += ev
+        for day, rec in recs.items():
+            if start <= day <= arch_end and _has_data(rec):
+                merged[day] = (rec, "open-meteo:archive", q, fa)
+    except (NetworkUnavailable, ApiError) as e:
+        if mode == "replay":
+            raise
+        events.append(f"archive_failed:{type(e).__name__}")
+        arch_end = start - _D(days=1)               # forecast endpoint must cover the whole lookback
+
+    if mode == "live":
+        past = min(92, max(FORECAST_PAST_DAYS, (as_of - arch_end).days))
+        recs, q, fa, ev = _fetch_segment(FORECAST_URL, lat, lon,
+                                         {"past_days": past, "forecast_days": FORECAST_DAYS}, 0)
+        events += ev
+        last = as_of + _D(days=FORECAST_DAYS - 1)
+        for day, rec in recs.items():
+            if arch_end < day <= last and day >= start and _has_data(rec):
+                merged[day] = (rec, "open-meteo:forecast", q, fa)
+
+    last_obs = as_of - _D(days=1) if mode == "live" else as_of
+    missing = sum(1 for i in range((last_obs - start).days + 1) if (start + _D(days=i)) not in merged)
+    if missing:
+        events.append(f"weather_gap:{missing}_days_missing")
+    return merged
+
+
+def get_rain_ensemble(lat, lon, as_of, events, factory):
+    params = {"latitude": round(lat, 4), "longitude": round(lon, 4), "hourly": "precipitation",
+              "models": ENSEMBLE_MODEL, "forecast_days": ENSEMBLE_DAYS + 1, "timezone": TZ}
+    try:
+        js, quality, fa, ev = get_json(ENSEMBLE_URL, params, 0)
+    except (NetworkUnavailable, ApiError) as e:
+        events.append(f"ensemble_failed:{type(e).__name__}")
+        return []
+    events += ev
+    members = parse_ensemble(js, as_of, ENSEMBLE_DAYS)
+    if not members:
+        events.append("ensemble_failed:no_complete_members")
+        return []
+    totals = sorted(sum(m) for m in members)
+    src = f"open-meteo:ensemble:{ENSEMBLE_MODEL}"
+    factory.make("ensemble_members", len(members), src, fa, quality, note=f"{ENSEMBLE_DAYS}-day horizon")
+    factory.make("ensemble_rain_total_mean_mm", round(sum(totals) / len(totals), 1), src, fa, quality, "mm",
+                 obs_date=as_of)
+    factory.make("ensemble_rain_total_p10_mm", round(totals[int(0.1 * (len(totals) - 1))], 1), src, fa, quality, "mm",
+                 obs_date=as_of)
+    factory.make("ensemble_rain_total_p90_mm", round(totals[int(0.9 * (len(totals) - 1))], 1), src, fa, quality, "mm",
+                 obs_date=as_of)
+    return members
+
+
+# ---------------------------------------------------------------- climatology
+def _same_doy(ref: dt.date, year: int) -> dt.date:
+    try:
+        return ref.replace(year=year)
+    except ValueError:                              # 29 Feb
+        return ref.replace(year=year, day=28)
+
+
+def _pct(x: float, pool: list[float]) -> float:
+    lo = sum(1 for v in pool if v < x)
+    eq = sum(1 for v in pool if v == x)
+    return round(100.0 * (lo + 0.5 * eq) / len(pool), 1)
+
+
+def _clim_year(lat, lon, ref_day, year):
+    c = _same_doy(ref_day, year)
+    try:
+        recs, q, fa, ev = _fetch_segment(ARCHIVE_URL, lat, lon,
+                                         {"start_date": (c - _D(days=13)).isoformat(),
+                                          "end_date": (c + _D(days=7)).isoformat()}, IMMUTABLE_TTL_S)
+    except (NetworkUnavailable, ApiError):
+        return {"year": year, "failed": True}
+    roots, shallows = [], []
+    for i in range(-7, 8):
+        rec = recs.get(c + _D(days=i), {})
+        if _sm_root(rec) is not None:
+            roots.append(_sm_root(rec))
+        if rec.get("sm0") is not None:
+            shallows.append(rec["sm0"])
+    rain = [recs.get(c - _D(days=13 - i), {}).get("precip") for i in range(14)]
+    total = sum(rain) if all(r is not None for r in rain) else None
+    return {"year": year, "failed": False, "roots": roots, "shallows": shallows, "rain14": total,
+            "quality": q, "fetched_at": fa, "events": ev}
+
+
+def compute_climatology(lat, lon, as_of, days: list[WeatherDay], factory: EvidenceFactory, events: list[str],
+                        first_year: int = CLIM_FIRST_YEAR) -> Climatology:
+    obs = sorted([d for d in days if not d.is_forecast and d.day <= as_of and d.precip_mm is not None],
+                 key=lambda d: d.day)
+    if not obs:
+        events.append("climatology_unavailable:no_observed_days")
+        return Climatology()
+    ref_day = obs[-1].day
+    ref = obs[-1]
+    years = list(range(first_year, as_of.year))          # strictly < as_of.year
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        results = list(ex.map(lambda y: _clim_year(lat, lon, ref_day, y), years))
+
+    ok = [r for r in results if not r["failed"]]
+    for r in results:
+        if r["failed"]:
+            events.append(f"climatology_year_failed:{r['year']}")
+    for r in ok:
+        events += [e for e in r["events"] if e not in events]
+    n_years = len(ok)
+    qualities = [r["quality"] for r in ok]
+    quality = "cached" if "cached" in qualities else "live"
+    fetched_at = max((r["fetched_at"] for r in ok), default=None)
+    src = f"open-meteo:archive:era5-climatology:{first_year}-{as_of.year - 1}"
+
+    clim = Climatology(n_years=n_years)
+    ids: list[str] = []
+    if n_years < 3 or fetched_at is None:
+        events.append("climatology_insufficient_years")
+        return clim
+
+    def add(key, value, unit=None, note=None):
+        ev = factory.make(key, value, src, fetched_at, quality, unit, ref_day, note)
+        ids.append(ev.id)
+        return ev
+
+    # soil moisture percentiles (current value vs same day-of-year +-7 d, all earlier years pooled)
+    cur_shallow = ref.sm_shallow
+    root_pool = [v for r in ok for v in r["roots"]]
+    sh_pool = [v for r in ok for v in r["shallows"]]
+    cur_root = ref.sm_root
+    if cur_root is not None and len(root_pool) >= 30:
+        clim.sm_root_percentile = _pct(cur_root, root_pool)
+        add("sm_root_current", round(cur_root, 4), "m3/m3")
+        add("sm_root_percentile", clim.sm_root_percentile, "percentile", f"n_years={n_years}, +-7 d window")
+    if cur_shallow is not None and len(sh_pool) >= 30:
+        clim.sm_shallow_percentile = _pct(cur_shallow, sh_pool)
+        add("sm_shallow_current", round(cur_shallow, 4), "m3/m3")
+        add("sm_shallow_percentile", clim.sm_shallow_percentile, "percentile", f"n_years={n_years}, +-7 d window")
+
+    # 14-day rain deficit
+    totals = [r["rain14"] for r in ok if r["rain14"] is not None]
+    last14 = [d for d in obs if (ref_day - d.day).days < 14]
+    if len(totals) >= 3 and len(last14) == 14:
+        normal = sum(totals) / len(totals)
+        observed = sum(d.precip_mm for d in last14)
+        clim.rain_deficit_14d_mm = round(normal - observed, 1)
+        add("rain_observed_14d_mm", round(observed, 1), "mm")
+        add("rain_normal_14d_mm", round(normal, 1), "mm", f"mean of {len(totals)} years")
+        add("rain_deficit_14d_mm", clim.rain_deficit_14d_mm, "mm", "normal - observed; positive = deficit")
+
+    # days since last rain > 2.5 mm (inside the fetched lookback window)
+    count, found = 0, False
+    for d in reversed(obs):
+        if (ref_day - d.day).days != count:             # gap in data -> stop, never guess
+            break
+        if d.precip_mm > RAIN_THRESHOLD_MM:
+            found = True
+            break
+        count += 1
+    clim.days_since_rain_gt_2p5mm = count
+    add("days_since_rain_gt_2p5mm", count, "days",
+        None if found else f"no rain >2.5 mm in the {count}-day window; true value is at least this")
+
+    clim.evidence_ids = ids
+    return clim
+
+
+# ---------------------------------------------------------------- public API
+def get_weather(lat: float, lon: float, as_of: dt.date, mode: str, lookback_days: int = 60,
+                include_climatology: bool = True, factory: Optional[EvidenceFactory] = None) -> WeatherBundle:
+    if mode not in ("live", "replay"):
+        raise ValueError("mode must be 'live' or 'replay'")
+    check_india(lat, lon)
+    factory = factory or EvidenceFactory()
+    events: list[str] = []
+    merged = _collect_days(lat, lon, as_of, mode, lookback_days, events)
+
+    groups: dict[tuple, list] = {}
+    for day, (rec, source, q, fa) in merged.items():
+        is_fc = mode == "live" and day >= as_of
+        groups.setdefault((source, is_fc, q, fa), []).append(day)
+    ev_by_group: dict[tuple, str] = {}
+    for (source, is_fc, q, fa), ds in groups.items():
+        ds.sort()
+        note = ("forecast days (model forecast)" if is_fc else
+                "observed/reanalysis days: precip, ET0, Tmax, soil moisture (hourly -> daily mean)")
+        ev = factory.make("weather_daily_series", f"{len(ds)} days {ds[0]}..{ds[-1]}", source, fa, q,
+                          obs_date=ds[-1], note=note)
+        ev_by_group[(source, is_fc, q, fa)] = ev.id
+
+    days: list[WeatherDay] = []
+    for day in sorted(merged):
+        rec, source, q, fa = merged[day]
+        is_fc = mode == "live" and day >= as_of
+        days.append(WeatherDay(day=day, precip_mm=rec.get("precip"), et0_mm=rec.get("et0"), tmax_c=rec.get("tmax"),
+                               sm_shallow=rec.get("sm0"), sm_root=_sm_root(rec), is_forecast=is_fc,
+                               evidence_id=ev_by_group[(source, is_fc, q, fa)]))
+
+    if mode == "replay":
+        events.append("no_ensemble_in_replay")
+        ensemble: list[list[float]] = []
+    else:
+        ensemble = get_rain_ensemble(lat, lon, as_of, events, factory)
+
+    clim = compute_climatology(lat, lon, as_of, days, factory, events) if include_climatology else Climatology()
+    return WeatherBundle(days=days, evidence=list(factory.rows), events=events, rain_ensemble=ensemble,
+                         climatology=clim, lat=lat, lon=lon)
+
+
+# ---------------------------------------------------------------- CLI
+def _main() -> None:
+    ap = argparse.ArgumentParser(description="BreakWatch P1 weather check")
+    ap.add_argument("--lat", type=float, required=True)
+    ap.add_argument("--lon", type=float, required=True)
+    ap.add_argument("--as-of", required=True, help="YYYY-MM-DD or 'today'")
+    ap.add_argument("--mode", choices=["live", "replay"], required=True)
+    ap.add_argument("--lookback", type=int, default=60)
+    a = ap.parse_args()
+    if a.as_of == "today":
+        from api.clock import today_utc
+        as_of = today_utc()
+    else:
+        as_of = dt.date.fromisoformat(a.as_of)
+    wb = get_weather(a.lat, a.lon, as_of, a.mode, a.lookback)
+    fc = [d for d in wb.days if d.is_forecast]
+    print(f"as_of={as_of} mode={a.mode} lat={a.lat} lon={a.lon}")
+    print(f"daily rows: {len(wb.days)}  (forecast rows: {len(fc)})")
+    print(f"{'day':<12}{'precip':>8}{'et0':>7}{'tmax':>7}{'sm_sh':>8}{'sm_root':>9}  fc")
+    shown = wb.days[:3] + wb.days[-3:] if len(wb.days) > 6 else wb.days
+    fmt = lambda v, n: f"{v:{n}.2f}" if v is not None else " " * (n - 4) + "None"
+    for d in shown:
+        print(f"{d.day!s:<12}{fmt(d.precip_mm, 8)}{fmt(d.et0_mm, 7)}{fmt(d.tmax_c, 7)}"
+              f"{fmt(d.sm_shallow, 8)}{fmt(d.sm_root, 9)}  {d.is_forecast}")
+    print("climatology:", wb.climatology.model_dump())
+    print(f"ensemble members: {len(wb.rain_ensemble)}")
+    print("evidence rows:")
+    for e in wb.evidence:
+        print(f"  {e.id} {e.key}={e.value} {e.unit or ''} src={e.source} q={e.quality} obs={e.obs_date}")
+    print("events:", wb.events)
+
+
+if __name__ == "__main__":
+    _main()
