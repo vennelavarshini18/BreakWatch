@@ -3,185 +3,632 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>BreakWatch</title>
+    <meta name="theme-color" content="#073b3a" />
+    <title>BreakWatch | Field Intelligence</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.4.0/leaflet.draw.css" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css" />
     <style>
       :root {
-        --bg: #f4f7fb;
-        --panel: #ffffff;
-        --ink: #183153;
-        --muted: #526985;
-        --line: #dfe9f5;
-        --accent: #0c7b5c;
-        --warning: #d97706;
-        --danger: #b91c1c;
-        --neutral: #64748b;
-        --low: #16a34a;
-        --watch: #f59e0b;
-        --high: #dc2626;
+        color-scheme: light;
+        --ink: #122e36;
+        --muted: #647d83;
+        --line: #e4ece9;
+        --canvas: #f3f7f5;
+        --panel: #fff;
+        --green: #0b765d;
+        --green-dark: #073b3a;
+        --green-soft: #e8f5ef;
+        --amber: #c66a16;
+        --amber-soft: #fff3e5;
+        --red: #b94a36;
+        --shadow: 0 16px 42px rgba(20, 48, 47, .12);
       }
+
       * { box-sizing: border-box; }
-      html, body { margin: 0; padding: 0; font-family: Arial, sans-serif; background: var(--bg); color: var(--ink); }
-      body { padding: 18px; }
-      .layout { display: grid; grid-template-columns: 360px minmax(0, 1fr); gap: 18px; }
-      .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 4px 18px rgba(15,23,42,.04); }
-      .sidebar { padding: 18px; }
-      .main { padding: 18px; }
-      h1 { margin: 0 0 16px; font-size: 2rem; }
-      .form-grid { display: grid; gap: 12px; }
-      label { display: grid; gap: 6px; font-size: 0.9rem; color: var(--muted); }
-      input, select, button { width: 100%; border-radius: 10px; border: 1px solid var(--line); padding: 10px 12px; font-size: 0.95rem; }
-      button { background: var(--accent); color: white; border: none; cursor: pointer; font-weight: 700; }
-      button:disabled { opacity: 0.6; cursor: wait; }
-      #map { height: 260px; width: 100%; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
-      .meta { margin-top: 12px; font-size: 0.82rem; color: var(--muted); }
-      .status-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 18px; }
-      .badge, .banner, .chip, .citation-chip {
-        display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 6px 10px; font-size: 0.76rem; font-weight: 700; border: 1px solid transparent;
+      html, body { width: 100%; min-width: 320px; min-height: 100%; margin: 0; }
+      body {
+        overflow: hidden;
+        background: var(--canvas);
+        color: var(--ink);
+        font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        font-size: 14px;
+        -webkit-font-smoothing: antialiased;
       }
-      .badge { background: #e8f3ee; color: var(--accent); }
-      .badge.watch { background: #fff7ed; color: var(--watch); }
-      .badge.high { background: #fef2f2; color: var(--high); }
-      .badge.low { background: #ecfdf5; color: var(--low); }
-      .badge.insufficient { background: #f1f5f9; color: var(--neutral); }
-      .banner { width: fit-content; max-width: 100%; border-radius: 10px; padding: 8px 10px; font-size: 0.78rem; }
-      .banner.info { background: #eef6ff; color: #1d4ed8; }
-      .banner.warn { background: #fff7ed; color: var(--warning); }
-      .banner.alert { background: #fef2f2; color: var(--danger); }
-      .banner.ok { background: #ecfdf5; color: var(--accent); }
-      .section { margin-top: 18px; }
-      .section h2 { margin: 0 0 12px; font-size: 1.1rem; }
-      .gauge-shell { display: flex; align-items: center; gap: 20px; }
+
+      button, input, select, textarea { font: inherit; }
+      button { cursor: pointer; }
+      .hidden { display: none !important; }
+      .workspace {
+        display: grid;
+        grid-template-columns: 68px minmax(0, 1fr) minmax(370px, 430px);
+        width: 100%;
+        height: 100dvh;
+        min-height: 620px;
+        overflow: hidden;
+      }
+
+      .rail {
+        z-index: 20;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 12px;
+        padding: 18px 10px;
+        background: var(--green-dark);
+        color: #e7f4ed;
+      }
+      .brand-mark {
+        display: grid;
+        width: 42px;
+        height: 42px;
+        margin-bottom: 20px;
+        place-items: center;
+        border-radius: 13px;
+        background: #d7f0df;
+        color: #075d43;
+        font-size: 20px;
+        font-weight: 850;
+        letter-spacing: -1px;
+        text-decoration: none;
+      }
+      .rail-action {
+        display: grid;
+        width: 42px;
+        height: 42px;
+        padding: 0;
+        place-items: center;
+        border: 0;
+        border-radius: 12px;
+        background: transparent;
+        color: #b5d2c8;
+        transition: background .18s ease, color .18s ease, transform .18s ease;
+      }
+      .rail-action:hover, .rail-action.active {
+        background: rgba(235, 250, 241, .14);
+        color: #fff;
+        transform: translateY(-1px);
+      }
+      .rail-action svg { width: 20px; height: 20px; }
+      .rail-spacer { flex: 1; }
+      .rail-caption {
+        color: #9ab9af;
+        font-size: 9px;
+        font-weight: 700;
+        letter-spacing: .12em;
+        writing-mode: vertical-rl;
+        transform: rotate(180deg);
+      }
+
+      .map-stage {
+        position: relative;
+        min-width: 0;
+        min-height: 0;
+        overflow: hidden;
+        background:
+          radial-gradient(ellipse at 38% 42%, rgba(201, 224, 207, .74), transparent 40%),
+          linear-gradient(135deg, #e5eee7, #dce8df);
+      }
+      #map {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        background: #e4ece6;
+      }
+      .map-topline {
+        position: absolute;
+        z-index: 500;
+        top: 20px;
+        right: 20px;
+        left: 20px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        pointer-events: none;
+      }
+      .map-title, .map-status {
+        display: inline-flex;
+        align-items: center;
+        gap: 9px;
+        min-height: 38px;
+        padding: 0 13px;
+        border: 1px solid rgba(226, 236, 230, .9);
+        border-radius: 12px;
+        background: rgba(255, 255, 255, .94);
+        box-shadow: 0 4px 16px rgba(17, 47, 42, .1);
+        color: var(--ink);
+        font-size: 12px;
+        font-weight: 750;
+        backdrop-filter: blur(8px);
+      }
+      .map-title svg { width: 17px; height: 17px; color: var(--green); }
+      .map-status { color: var(--muted); font-weight: 650; }
+      .live-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #38a66e;
+        box-shadow: 0 0 0 4px rgba(56, 166, 110, .12);
+      }
+
+      .field-card {
+        position: absolute;
+        z-index: 500;
+        top: 76px;
+        left: 20px;
+        width: min(320px, calc(100% - 40px));
+        padding: 19px;
+        border: 1px solid rgba(228, 236, 233, .9);
+        border-radius: 18px;
+        background: rgba(255, 255, 255, .97);
+        box-shadow: var(--shadow);
+        backdrop-filter: blur(10px);
+      }
+      .field-card-heading {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 16px;
+      }
+      .field-card-heading h1 {
+        margin: 0;
+        font-size: 17px;
+        font-weight: 780;
+        letter-spacing: -.025em;
+      }
+      .field-card-heading p {
+        margin: 5px 0 0;
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.4;
+      }
+      .field-icon {
+        display: grid;
+        width: 36px;
+        height: 36px;
+        flex: 0 0 auto;
+        place-items: center;
+        border-radius: 11px;
+        background: var(--green-soft);
+        color: var(--green);
+      }
+      .field-icon svg { width: 19px; height: 19px; }
+      .form-grid { display: grid; gap: 11px; }
+      .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+      label {
+        display: grid;
+        min-width: 0;
+        gap: 6px;
+        color: #587076;
+        font-size: 11px;
+        font-weight: 650;
+      }
+      input, select, textarea {
+        width: 100%;
+        min-height: 39px;
+        padding: 8px 10px;
+        border: 1px solid #dce7e2;
+        border-radius: 9px;
+        outline: none;
+        background: #fff;
+        color: var(--ink);
+        font-size: 12px;
+        transition: border-color .16s ease, box-shadow .16s ease;
+      }
+      input:focus, select:focus, textarea:focus {
+        border-color: #57a989;
+        box-shadow: 0 0 0 3px rgba(38, 135, 96, .12);
+      }
+      textarea { min-height: 82px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; }
+      #polygonFallback { grid-column: 1 / -1; }
+      .analyze-button {
+        display: inline-flex;
+        min-height: 43px;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        margin-top: 2px;
+        border: 0;
+        border-radius: 10px;
+        background: linear-gradient(135deg, #0d8061, #09684f);
+        box-shadow: 0 5px 12px rgba(11, 118, 93, .2);
+        color: #fff;
+        font-size: 12px;
+        font-weight: 750;
+        transition: filter .16s ease, transform .16s ease, box-shadow .16s ease;
+      }
+      .analyze-button:hover { filter: brightness(1.05); transform: translateY(-1px); box-shadow: 0 8px 16px rgba(11, 118, 93, .24); }
+      .analyze-button:disabled { cursor: wait; opacity: .7; transform: none; }
+      .analyze-button svg { width: 16px; height: 16px; }
+      .meta { min-height: 15px; margin-top: 11px; color: var(--muted); font-size: 10px; line-height: 1.45; }
+      .map-note {
+        position: absolute;
+        z-index: 400;
+        bottom: 17px;
+        left: 20px;
+        padding: 8px 11px;
+        border: 1px solid rgba(228, 236, 233, .88);
+        border-radius: 9px;
+        background: rgba(255, 255, 255, .92);
+        color: #60777c;
+        font-size: 10px;
+        box-shadow: 0 4px 12px rgba(17, 47, 42, .08);
+      }
+      .map-note strong { color: var(--ink); }
+      .leaflet-control-zoom a {
+        color: #163f3d !important;
+      }
+      .leaflet-draw-toolbar a {
+        border-color: #dfe9e4 !important;
+      }
+
+      .results-panel {
+        z-index: 10;
+        display: flex;
+        min-width: 0;
+        min-height: 0;
+        flex-direction: column;
+        overflow: hidden;
+        border-left: 1px solid var(--line);
+        background: var(--panel);
+      }
+      .results-header {
+        flex: 0 0 auto;
+        padding: 23px 24px 17px;
+        border-bottom: 1px solid #edf2ef;
+      }
+      .eyebrow {
+        margin: 0 0 7px;
+        color: #77908e;
+        font-size: 9px;
+        font-weight: 800;
+        letter-spacing: .14em;
+        text-transform: uppercase;
+      }
+      .results-title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+      .results-title-row h2 { margin: 0; font-size: 21px; font-weight: 780; letter-spacing: -.04em; }
+      .results-subtitle { margin: 6px 0 0; color: var(--muted); font-size: 11px; }
+      .status-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
+      .badge, .banner, .chip, .citation-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        border: 1px solid transparent;
+        border-radius: 999px;
+        font-size: 10px;
+        font-weight: 750;
+      }
+      .badge { min-height: 26px; padding: 4px 10px; background: #eef4f1; color: #536b6b; }
+      .badge.watch { background: #fff2df; color: #a45b10; }
+      .badge.high { background: #ffebe7; color: #a84431; }
+      .badge.low { background: #e7f6ec; color: #257243; }
+      .badge.insufficient { background: #f0f3f4; color: #617379; }
+      .banner {
+        width: auto;
+        max-width: 100%;
+        padding: 9px 11px;
+        border-radius: 10px;
+        font-size: 10px;
+        line-height: 1.45;
+      }
+      .banner.info { background: #edf5fb; color: #356b8b; }
+      .banner.warn { background: var(--amber-soft); color: #98500d; }
+      .banner.alert { background: #fff0ed; color: #a53d2b; }
+      .banner.ok { background: var(--green-soft); color: var(--green); }
+      #runError, #dataWarning { margin: 12px 18px 0; }
+      .results-scroll {
+        min-height: 0;
+        flex: 1;
+        overflow: auto;
+        padding: 16px 18px 24px;
+        scrollbar-color: #cfdbd6 transparent;
+        scrollbar-width: thin;
+      }
+      .section { margin: 0 0 15px; }
+      .section-heading {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 9px;
+      }
+      .section h3 { margin: 0; font-size: 12px; font-weight: 780; letter-spacing: -.01em; }
+      .section-kicker { color: #8a9c9b; font-size: 9px; font-weight: 650; }
+      .metric-card, .content-card {
+        border: 1px solid var(--line);
+        border-radius: 13px;
+        background: #fff;
+      }
+      .metric-card {
+        display: grid;
+        grid-template-columns: 76px minmax(0, 1fr);
+        align-items: center;
+        gap: 13px;
+        padding: 14px;
+        background: linear-gradient(135deg, #fbfdfc, #f7faf8);
+      }
       .gauge-ring {
-        width: 125px; height: 125px; border-radius: 50%; position: relative; background: conic-gradient(var(--accent) 0deg 0deg, #e5e7eb 0deg 360deg);
-        display: grid; place-items: center;
+        position: relative;
+        display: grid;
+        width: 72px;
+        height: 72px;
+        place-items: center;
+        border-radius: 50%;
+        background: conic-gradient(var(--green) 0deg 0deg, #e7eeea 0deg 360deg);
       }
       .gauge-ring::before {
-        content: ""; position: absolute; inset: 12px; border-radius: 50%; background: white; box-shadow: inset 0 0 0 1px var(--line);
+        position: absolute;
+        inset: 7px;
+        border-radius: 50%;
+        background: #fff;
+        box-shadow: inset 0 0 0 1px #e8efeb;
+        content: "";
       }
-      .gauge-value { position: relative; z-index: 1; font-weight: 800; font-size: 1.3rem; }
-      .gauge-value small { display: block; text-align: center; font-size: 0.62rem; color: var(--muted); }
-      .chart-wrap { height: 220px; }
-      .chip-row, .citation-row { display: flex; flex-wrap: wrap; gap: 8px; }
-      .chip { background: #eff6ff; color: #1d4ed8; border-color: #dbeafe; }
-      .chip.experimental { background: #fff7ed; color: #b45309; border-color: #fed7aa; }
-      .citation-chip { background: #f8fafc; color: var(--ink); border-color: var(--line); cursor: pointer; }
-      .list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
-      .list li { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: #fafcff; }
-      .list small { display: block; color: var(--muted); margin-top: 6px; }
-      .empty { color: var(--muted); font-size: 0.9rem; }
-      .hidden { display: none !important; }
-      .modal { position: fixed; inset: 0; background: rgba(15,23,42,0.5); display: none; align-items: center; justify-content: center; padding: 20px; }
+      .gauge-value { position: relative; z-index: 1; font-size: 15px; font-weight: 800; letter-spacing: -.04em; text-align: center; }
+      .gauge-value small { display: block; margin-top: 1px; color: #748985; font-size: 8px; font-weight: 700; letter-spacing: 0; }
+      .metric-copy { min-width: 0; }
+      .metric-copy strong { display: block; margin-bottom: 4px; font-size: 12px; }
+      .muted { color: var(--muted); font-size: 10px; line-height: 1.45; }
+      .chart-wrap { height: 165px; }
+      .content-card { padding: 12px; }
+      .content-card .empty, .empty { color: var(--muted); font-size: 10px; line-height: 1.5; }
+      .forecast-card { min-height: 54px; }
+      .soil-summary {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+      .soil-summary strong { color: var(--green); font-size: 17px; }
+      .list { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; }
+      .list li {
+        padding: 10px 11px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: #fbfdfc;
+        color: #456066;
+        font-size: 10px;
+        line-height: 1.45;
+      }
+      .list li strong { color: var(--ink); font-size: 10px; }
+      .list small { display: block; margin-top: 6px; color: #718985; font-size: 9px; }
+      .citation-chip { margin-top: 8px; padding: 5px 8px; border-color: #dceae3; background: #f4faf6; color: #24744f; cursor: pointer; }
+      .citation-chip:hover { background: #e7f5ec; }
+      .chip-row, .citation-row { display: flex; flex-wrap: wrap; gap: 6px; }
+      .chip { padding: 6px 9px; border-color: #e3ebe7; background: #f5f8f6; color: #58716d; font-size: 9px; }
+      .chip.experimental { border-color: #f2dfc9; background: #fff7ec; color: #a75e19; }
+      #eventBanners { display: grid; gap: 6px; }
+      .modal { position: fixed; z-index: 2000; inset: 0; display: none; align-items: center; justify-content: center; padding: 20px; background: rgba(7, 32, 34, .55); }
       .modal.visible { display: flex; }
-      .modal-card { background: white; border-radius: 16px; width: min(700px, 90vw); max-height: 82vh; overflow: auto; padding: 20px; border: 1px solid var(--line); }
-      .close-btn { float: right; border: none; background: transparent; font-size: 1.4rem; cursor: pointer; color: var(--muted); }
-      .muted { color: var(--muted); }
-      @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+      .modal-card { width: min(620px, 92vw); max-height: 82vh; overflow: auto; padding: 22px; border: 1px solid var(--line); border-radius: 18px; background: #fff; box-shadow: var(--shadow); }
+      .modal-card h3 { margin: 2px 0 16px; font-size: 17px; }
+      .close-btn { float: right; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 9px; background: #f0f5f2; color: #4c6662; font-size: 20px; line-height: 1; }
+
+      @media (max-width: 1050px) {
+        .workspace { grid-template-columns: 58px minmax(0, 1fr) minmax(340px, 39vw); }
+        .rail { padding-right: 8px; padding-left: 8px; }
+        .field-card { width: min(300px, calc(100% - 34px)); left: 16px; }
+        .map-topline { right: 16px; left: 16px; }
+      }
+      @media (max-width: 760px) {
+        body { overflow: auto; }
+        .workspace {
+          grid-template-columns: 52px minmax(0, 1fr);
+          grid-template-rows: minmax(510px, 67vh) auto;
+          height: auto;
+          min-height: 100dvh;
+          overflow: visible;
+        }
+        .rail { grid-column: 1; grid-row: 1 / span 2; min-height: 100%; padding: 13px 5px; }
+        .brand-mark, .rail-action { width: 38px; height: 38px; }
+        .brand-mark { margin-bottom: 10px; }
+        .map-stage { grid-column: 2; grid-row: 1; min-height: 510px; }
+        .results-panel { grid-column: 2; grid-row: 2; min-height: 620px; border-top: 1px solid var(--line); border-left: 0; }
+        .results-scroll { overflow: visible; }
+        .field-card { top: 68px; left: 12px; width: min(300px, calc(100% - 24px)); padding: 14px; }
+        .map-topline { top: 12px; right: 12px; left: 12px; }
+        .map-note { bottom: 12px; left: 12px; }
+        .results-header { padding: 18px 18px 14px; }
+        .results-title-row h2 { font-size: 19px; }
+      }
+      @media (max-width: 420px) {
+        .field-card { width: min(274px, calc(100% - 64px)); min-width: 220px; left: 10px; padding: 12px; }
+        .form-grid { gap: 8px; }
+        .map-title { padding: 0 9px; font-size: 10px; }
+        .map-status { padding: 0 9px; font-size: 9px; }
+        .results-scroll { padding-right: 13px; padding-left: 13px; }
+      }
     </style>
   </head>
   <body>
-    <div class="layout">
-      <aside class="panel sidebar">
-        <h1>BreakWatch</h1>
-        <div class="form-grid">
-          <div id="map" aria-label="Field map"></div>
-          <label>
-            As of date
-            <input id="asOfInput" type="date" />
-          </label>
-          <label>
-            Crop
-            <select id="cropInput">
-              <option value="">Select crop</option>
-              <option value="cotton">Cotton</option>
-              <option value="maize">Maize</option>
-              <option value="paddy">Paddy</option>
-              <option value="redgram">Redgram</option>
-            </select>
-          </label>
-          <label>
-            Soil
-            <select id="soilInput">
-              <option value="">Select soil</option>
-              <option value="red_sandy">Red sandy</option>
-              <option value="black_clay">Black clay</option>
-              <option value="loam">Loam</option>
-            </select>
-          </label>
-          <label>
-            Irrigation budget (mm)
-            <input id="irrigationInput" type="number" min="0" step="0.1" value="0" />
-          </label>
-          <button id="analyzeBtn" type="button">Analyze</button>
+    <div class="workspace">
+      <nav class="rail" aria-label="Workspace navigation">
+        <a class="brand-mark" href="/" aria-label="BreakWatch home">B</a>
+        <button class="rail-action active" type="button" data-target="mapStage" aria-label="Show field map" title="Field map">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3z"/><path d="M9 3v15m6-12v15"/>
+          </svg>
+        </button>
+        <button class="rail-action" type="button" data-target="resultsPanel" aria-label="Show field results" title="Field results">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"/><path d="M8 7h8M8 11h8"/>
+          </svg>
+        </button>
+        <div class="rail-spacer"></div>
+        <span class="rail-caption">FIELD INTELLIGENCE</span>
+      </nav>
+
+      <section class="map-stage" id="mapStage" aria-label="Field map workspace">
+        <div id="map" aria-label="Draw or select a field on the map"></div>
+        <div class="map-topline">
+          <div class="map-title">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M3 7.5 12 3l9 4.5-9 4.5z"/><path d="M3 7.5V17l9 4 9-4V7.5"/><path d="M12 12v9"/>
+            </svg>
+            Field boundary
+          </div>
         </div>
-        <div class="meta" id="formMeta">Draw a field polygon to begin.</div>
-      </aside>
 
-      <main class="panel main">
-        <div class="status-row" id="statusRow"></div>
-
-        <section class="section">
-          <h2>Field stress</h2>
-          <div class="gauge-shell">
-            <div class="gauge-ring" id="gaugeRing">
-              <div class="gauge-value" id="gaugeValue">--<small>stress</small></div>
-            </div>
+        <section class="field-card" aria-labelledby="fieldFormTitle">
+          <div class="field-card-heading">
             <div>
-              <div id="gaugeLabel" class="muted">Insufficient data</div>
-              <div id="gaugeConfidence" class="muted"></div>
+              <h1 id="fieldFormTitle">Analyze a field</h1>
+              <p>Choose field conditions to review available evidence.</p>
+            </div>
+            <span class="field-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="m12 3 8 4.5v9L12 21l-8-4.5v-9z"/><path d="m4 7.5 8 4.5 8-4.5M12 12v9"/>
+              </svg>
+            </span>
+          </div>
+          <div class="form-grid">
+            <label>
+              As of date
+              <input id="asOfInput" type="date" />
+            </label>
+            <div class="form-row">
+              <label>
+                Crop
+                <select id="cropInput">
+                  <option value="">Select crop</option>
+                  <option value="cotton">Cotton</option>
+                  <option value="maize">Maize</option>
+                  <option value="paddy">Paddy</option>
+                  <option value="redgram">Redgram</option>
+                </select>
+              </label>
+              <label>
+                Soil
+                <select id="soilInput">
+                  <option value="">Select soil</option>
+                  <option value="red_sandy">Red sandy</option>
+                  <option value="black_clay">Black clay</option>
+                  <option value="loam">Loam</option>
+                </select>
+              </label>
+            </div>
+            <label>
+              Irrigation budget (mm)
+              <input id="irrigationInput" type="number" min="0" step="0.1" value="0" aria-label="Irrigation budget in millimeters" />
+            </label>
+            <label id="polygonFallback" class="hidden">
+              Field polygon (GeoJSON)
+              <textarea id="polygonInput" rows="4" placeholder='{"type":"Polygon","coordinates":[[[78,17],[78.1,17],[78.1,17.1],[78,17.1],[78,17]]]}'>
+              </textarea>
+            </label>
+            <button id="analyzeBtn" class="analyze-button" type="button">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M4 12h15M13 5l7 7-7 7"/>
+              </svg>
+              Analyze field
+            </button>
+          </div>
+          <div class="meta" id="formMeta">Draw your field boundary on the map to get started.</div>
+        </section>
+        <div class="map-note"><strong>Tip</strong> &nbsp;Use the polygon tool to outline a field boundary.</div>
+      </section>
+
+      <aside class="results-panel" id="resultsPanel" aria-label="Field results">
+        <header class="results-header">
+          <p class="eyebrow">BreakWatch / Field monitor</p>
+          <div class="results-title-row">
+            <div>
+              <h2>Field intelligence</h2>
+              <p class="results-subtitle">Evidence and outlook for the selected field</p>
             </div>
           </div>
-        </section>
+          <div class="status-row" id="statusRow"></div>
+        </header>
+        <div id="runError" class="banner alert hidden" role="alert"></div>
+        <div id="dataWarning" class="banner warn hidden" role="status"></div>
+        <div class="results-scroll">
+          <section class="section">
+            <div class="section-heading">
+              <h3>Field stress</h3>
+              <span class="section-kicker">CURRENT STATUS</span>
+            </div>
+            <div class="metric-card">
+              <div class="gauge-ring" id="gaugeRing">
+                <div class="gauge-value" id="gaugeValue">--<small>stress</small></div>
+              </div>
+              <div class="metric-copy">
+                <strong id="gaugeLabel">Insufficient data</strong>
+                <div id="gaugeConfidence" class="muted">A validated stress metric will appear when evidence is available.</div>
+              </div>
+            </div>
+          </section>
 
-        <section class="section">
-          <h2>Forecast</h2>
-          <div id="forecastPanel" class="empty">Awaiting forecast output.</div>
-        </section>
+          <section class="section">
+            <div class="section-heading">
+              <h3>Forecast</h3>
+              <span class="section-kicker">14-DAY OUTLOOK</span>
+            </div>
+            <div id="forecastPanel" class="content-card forecast-card empty">Awaiting forecast output.</div>
+          </section>
 
-        <section class="section">
-          <h2>Weather</h2>
-          <div id="weatherChart" class="chart-wrap empty">No weather data available.</div>
-        </section>
+          <section class="section">
+            <div class="section-heading">
+              <h3>Weather observations</h3>
+              <span class="section-kicker">RECENT DAILY DATA</span>
+            </div>
+            <div id="weatherChart" class="content-card chart-wrap empty">No weather data available.</div>
+          </section>
 
-        <section class="section">
-          <h2>Soil moisture</h2>
-          <div id="soilSummary" class="empty">No soil-moisture benchmark available.</div>
-        </section>
+          <section class="section">
+            <div class="section-heading">
+              <h3>Soil moisture</h3>
+              <span class="section-kicker">HISTORICAL BENCHMARK</span>
+            </div>
+            <div id="soilSummary" class="content-card empty">No soil-moisture benchmark available.</div>
+          </section>
 
-        <section class="section">
-          <h2>Triggers</h2>
-          <ul id="triggerList" class="list"></ul>
-        </section>
+          <section class="section">
+            <div class="section-heading">
+              <h3>Triggers</h3>
+              <span class="section-kicker">RULE-BASED SIGNALS</span>
+            </div>
+            <ul id="triggerList" class="list"></ul>
+          </section>
 
-        <section class="section">
-          <h2>Advisory</h2>
-          <div id="advisoryList" class="list"></div>
-        </section>
+          <section class="section">
+            <div class="section-heading">
+              <h3>Advisory</h3>
+              <span class="section-kicker">GUIDANCE</span>
+            </div>
+            <div id="advisoryList" class="list"></div>
+          </section>
 
-        <section class="section">
-          <h2>Sources</h2>
-          <div id="sourceChips" class="chip-row"></div>
-        </section>
+          <section class="section">
+            <div class="section-heading">
+              <h3>Sources</h3>
+              <span class="section-kicker">EVIDENCE LINEAGE</span>
+            </div>
+            <div id="sourceChips" class="chip-row"></div>
+          </section>
 
-        <section class="section">
-          <h2>Evidence / event banners</h2>
-          <div id="eventBanners"></div>
-        </section>
-      </main>
+          <section class="section">
+            <div class="section-heading">
+              <h3>Data quality &amp; events</h3>
+              <span class="section-kicker">RUN DETAILS</span>
+            </div>
+            <div id="eventBanners"></div>
+          </section>
+        </div>
+      </aside>
     </div>
 
-    <div id="citationModal" class="modal" aria-modal="true" role="dialog">
+    <div id="citationModal" class="modal" aria-modal="true" role="dialog" aria-labelledby="citationTitle">
       <div class="modal-card">
-        <button class="close-btn" type="button" id="closeCitationModal">×</button>
+        <button class="close-btn" type="button" id="closeCitationModal" aria-label="Close citation">×</button>
         <h3 id="citationTitle">ICAR citation</h3>
         <div id="citationBody" class="muted"></div>
       </div>
     </div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.4.0/leaflet.draw.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
-    <script src="./app.js"></script>
+    <script src="./app.js?v=7"></script>
   </body>
 </html>

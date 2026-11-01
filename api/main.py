@@ -6,6 +6,7 @@ import os
 import uuid
 from datetime import date
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
@@ -15,7 +16,7 @@ from pydantic import BaseModel, Field, field_validator
 from agent.graph import run_graph
 from api.clock import _now, resolve_mode
 from contracts import FieldInput
-
+from geo.weather import centroid_of
 
 if os.getenv("DEMO_MODE") == "1" and os.getenv("USE_FIXTURES") == "1":
     print("ERROR: DEMO_MODE=1 and USE_FIXTURES=1 are not allowed together.")
@@ -25,9 +26,9 @@ if os.getenv("DEMO_MODE") == "1" and os.getenv("USE_FIXTURES") == "1":
 class RunRequest(BaseModel):
     polygon: dict
     as_of: date
-    crop: str | None = None
+    crop: Literal["cotton", "maize", "paddy", "redgram"] | None = None
     sowing_date: date | None = None
-    soil: str | None = None
+    soil: Literal["red_sandy", "black_clay", "loam"] | None = None
     irrigation_budget_mm: float = Field(0.0, ge=0)
 
     @field_validator("polygon")
@@ -39,6 +40,10 @@ class RunRequest(BaseModel):
             raise ValueError("polygon must be a GeoJSON Polygon")
         if not value.get("coordinates"):
             raise ValueError("polygon coordinates are required")
+        try:
+            centroid_of(value)
+        except ValueError as exc:
+            raise ValueError(f"polygon is invalid: {exc}") from exc
         return value
 
     @field_validator("as_of")
@@ -73,12 +78,24 @@ async def _run_pipeline(run_id: str, payload: RunRequest) -> None:
             mode=resolve_mode(payload.as_of),
         )
         await _write_event(run_id, "validate", "done", "field accepted")
-        result = run_graph(field, events=[{"node": "validate", "status": "done", "msg": "field accepted"}])
+        await _write_event(
+            run_id,
+            "observations",
+            "start",
+            "loading weather and satellite observations; this may take up to 3 minutes",
+        )
+        result = await asyncio.to_thread(
+            run_graph,
+            field,
+            events=[{"node": "validate", "status": "done", "msg": "field accepted"}],
+        )
         app.state.runs[run_id]["result"] = result
         app.state.runs[run_id]["done"] = True
         await _write_event(run_id, "respond", "done", "run complete")
     except Exception as exc:  # pragma: no cover - runtime safety for background task
-        app.state.runs[run_id]["done"] = True
+        store = app.state.runs[run_id]
+        store["error"] = str(exc)
+        store["done"] = True
         await _write_event(run_id, "respond", "error", str(exc))
 
 
@@ -120,7 +137,11 @@ async def run_result(run_id: str):
     run = app.state.runs.get(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="run not found")
-    return run["result"] or {"run_id": run_id, "status": "processing"}
+    if run["result"] is not None:
+        return run["result"]
+    if run.get("error"):
+        return {"run_id": run_id, "status": "error", "error": run["error"]}
+    return {"run_id": run_id, "status": "processing"}
 
 
 @app.get("/health")

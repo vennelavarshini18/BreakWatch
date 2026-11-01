@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable
 
@@ -11,14 +10,25 @@ def safe_call(name: str, fn: Callable, *args, timeout: float | None = 8.0, **kwa
     try:
         if timeout is None:
             return fn(*args, **kwargs), events
-        with ThreadPoolExecutor(max_workers=1) as executor:
+        executor = ThreadPoolExecutor(max_workers=1)
+        try:
             future = executor.submit(fn, *args, **kwargs)
-            return future.result(timeout=timeout), events
+            result = future.result(timeout=timeout)
+        except TimeoutError:
+            future.cancel()
+            executor.shutdown(wait=False, cancel_futures=True)
+            raise
+        except Exception:
+            executor.shutdown(wait=True)
+            raise
+        else:
+            executor.shutdown(wait=True)
+            return result, events
     except NotImplementedError:
         events.append(f"module_unavailable:{name}")
         return None, events
-    except TimeoutError as exc:
-        events.append(f"error:{name}:timeout:{exc}")
+    except TimeoutError:
+        events.append(f"error:{name}:timeout:after {timeout:g}s")
         return None, events
     except Exception as exc:  # pragma: no cover - runtime safety
         reason = exc.__class__.__name__
