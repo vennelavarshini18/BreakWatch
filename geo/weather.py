@@ -18,7 +18,8 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
-from dataclasses import dataclass, field as dc_field
+from dataclasses import dataclass
+from dataclasses import field as dc_field
 from typing import Optional
 
 import pandas as pd
@@ -44,6 +45,7 @@ FORECAST_DAYS = 16
 ENSEMBLE_DAYS = 14
 CLIM_FIRST_YEAR = 2010
 REPLAY_TTL_S = 24 * 3600
+LIVE_FORECAST_CACHE_TTL_S = 15 * 60
 _D = dt.timedelta
 
 
@@ -165,10 +167,25 @@ def parse_ensemble(js: dict, as_of: dt.date, n_days: int) -> list[list[float]]:
 
 
 # ---------------------------------------------------------------- fetching
-def _fetch_segment(url: str, lat: float, lon: float, extra: dict, ttl_s: int):
+def _fetch_segment(
+    url: str,
+    lat: float,
+    lon: float,
+    extra: dict,
+    ttl_s: int,
+    stale_if_error_ttl_s: int | None = None,
+):
     params = {"latitude": round(lat, 4), "longitude": round(lon, 4), "daily": DAILY_VARS,
               "hourly": HOURLY_SM, "timezone": TZ, **extra}
-    js, quality, fetched_at, events = get_json(url, params, ttl_s)
+    if stale_if_error_ttl_s is None:
+        js, quality, fetched_at, events = get_json(url, params, ttl_s)
+    else:
+        js, quality, fetched_at, events = get_json(
+            url,
+            params,
+            ttl_s,
+            stale_if_error_ttl_s=stale_if_error_ttl_s,
+        )
     return parse_openmeteo(js), quality, fetched_at, events
 
 
@@ -195,7 +212,9 @@ def _collect_days(lat, lon, as_of, mode, lookback_days, events):
     if mode == "live":
         past = min(92, max(FORECAST_PAST_DAYS, (as_of - arch_end).days))
         recs, q, fa, ev = _fetch_segment(FORECAST_URL, lat, lon,
-                                         {"past_days": past, "forecast_days": FORECAST_DAYS}, 0)
+                                         {"past_days": past, "forecast_days": FORECAST_DAYS},
+                                         LIVE_FORECAST_CACHE_TTL_S,
+                                         stale_if_error_ttl_s=LIVE_FORECAST_CACHE_TTL_S)
         events += ev
         last = as_of + _D(days=FORECAST_DAYS - 1)
         for day, rec in recs.items():

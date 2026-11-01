@@ -364,8 +364,34 @@ function renderTriggers(result) {
   if (!triggers.length) {
     const li = document.createElement('li');
     li.className = 'empty';
-    li.textContent = 'No triggers were fired in the current result.';
+    const passages = Array.isArray(result && result.passages) ? result.passages : [];
+    if (!passages.length) {
+      li.textContent = 'No triggers were fired in the current result.';
+      els.triggerList.appendChild(li);
+      return;
+    }
+
+    li.textContent = 'No trigger evaluation is available. These retrieved ICAR passages are plan references, not current field signals.';
     els.triggerList.appendChild(li);
+    passages.forEach((passage) => {
+      if (!passage || !passage.chunk_id) return;
+      const reference = document.createElement('li');
+      const label = document.createElement('strong');
+      label.textContent = `${passage.district || 'District'} ICAR plan`;
+      const metadata = document.createElement('small');
+      metadata.textContent = [
+        passage.condition,
+        passage.plan_year,
+        passage.page ? `page ${passage.page}` : '',
+      ].filter(Boolean).join(' · ');
+      const citation = document.createElement('button');
+      citation.type = 'button';
+      citation.className = 'citation-chip';
+      citation.textContent = `ICAR citation · ${passage.chunk_id}`;
+      citation.addEventListener('click', () => openCitation(passage.chunk_id, result));
+      reference.append(label, document.createElement('br'), metadata, document.createElement('br'), citation);
+      els.triggerList.appendChild(reference);
+    });
     return;
   }
 

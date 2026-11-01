@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import time
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -23,6 +24,7 @@ import httpx
 
 TIMEOUT_S = 8.0
 BACKOFFS_S = (1.0, 3.0)                      # 2 retries
+MAX_RETRY_AFTER_S = 30.0
 IMMUTABLE_TTL_S = 10 * 365 * 24 * 3600       # "forever" for archive years that cannot change
 CACHE_DIR = Path(os.environ.get("BREAKWATCH_CACHE_DIR",
                                 Path(__file__).resolve().parents[1] / "data" / "cache"))
@@ -90,21 +92,56 @@ def _to_dt(ts: float) -> dt.datetime:
     return dt.datetime.fromtimestamp(ts, tz=dt.timezone.utc)
 
 
-def get_json(url: str, params: dict | None, ttl_s: int = 0):
+def _retry_after_seconds(value: str | None) -> float | None:
+    if not value:
+        return None
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        try:
+            retry_at = parsedate_to_datetime(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if retry_at.tzinfo is None:
+            retry_at = retry_at.replace(tzinfo=dt.timezone.utc)
+        return max(0.0, retry_at.timestamp() - time.time())
+
+
+def get_json(
+    url: str,
+    params: dict | None,
+    ttl_s: int = 0,
+    stale_if_error_ttl_s: int | None = None,
+):
     """-> (json, quality, fetched_at, events). quality is 'live' or 'cached'."""
     events: list[str] = []
     host = host_label(url)
     key = cache_key(url, params)
     cached = _read_cache(key)
+    now = time.time()
+    cache_age = now - cached["fetched_ts"] if cached else None
 
-    if cached and ttl_s > 0 and (time.time() - cached["fetched_ts"]) <= ttl_s:
+    if cached and ttl_s > 0 and cache_age <= ttl_s:
         return cached["body"], "cached", _to_dt(cached["fetched_ts"]), [f"cache_hit:{host}"]
 
     last_err: Exception | None = None
-    for attempt in range(len(BACKOFFS_S) + 1):
+    attempts = len(BACKOFFS_S) + 1
+    for attempt in range(attempts):
         try:
             r = _request(url, params)
-            if r.status_code == 429 or r.status_code >= 500:
+            if r.status_code == 429:
+                retry_after = _retry_after_seconds(r.headers.get("Retry-After"))
+                if retry_after is not None:
+                    if retry_after > MAX_RETRY_AFTER_S:
+                        events.append(f"retry_deferred:{host}:{retry_after:g}s")
+                        last_err = httpx.HTTPError("HTTP 429; Retry-After exceeds retry window")
+                        break
+                    if attempt < attempts - 1:
+                        events.append(f"retry:{host}:after_{retry_after:g}s")
+                        time.sleep(retry_after)
+                        continue
+                raise httpx.HTTPError("HTTP 429")
+            if r.status_code >= 500:
                 raise httpx.HTTPError(f"HTTP {r.status_code}")
             if 400 <= r.status_code < 500:
                 try:
@@ -120,11 +157,15 @@ def get_json(url: str, params: dict | None, ttl_s: int = 0):
             raise
         except (httpx.HTTPError, ValueError, OSError) as e:
             last_err = e
-            if attempt < len(BACKOFFS_S):
+            if attempt < attempts - 1:
                 events.append(f"retry:{host}:{attempt + 1}")
                 time.sleep(BACKOFFS_S[attempt])
 
-    if cached:
+    if cached and (
+        stale_if_error_ttl_s is None or cache_age <= stale_if_error_ttl_s
+    ):
         events.append(f"cache_used:{host}")
         return cached["body"], "cached", _to_dt(cached["fetched_ts"]), events
+    if cached:
+        events.append(f"cache_expired:{host}")
     raise NetworkUnavailable(f"{host} unreachable after retries and no cached copy ({last_err})")

@@ -29,7 +29,7 @@ def payload(s, e):
 
 
 def make_fake(ref):
-    def fake(url, params, ttl_s=0):
+    def fake(url, params, ttl_s=0, **kwargs):
         now = dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc)
         if "ensemble" in url:
             days = [ref + D(days=i) for i in range(15)]
@@ -70,6 +70,25 @@ def test_live_has_16_forecast_rows_and_ensemble(monkeypatch):
     assert len(b.rain_ensemble) == 2 and len(b.rain_ensemble[0]) == 14
     # climatology reference day is the last OBSERVED day (as_of - 1 in live)
     assert max(w.day for w in b.weather_daily if not w.is_forecast) == as_of - D(days=1)
+
+
+def test_live_forecast_segment_uses_bounded_recent_cache(monkeypatch):
+    as_of = dt.date(2026, 11, 1)
+    calls = []
+
+    def fake_segment(url, lat, lon, extra, ttl_s, stale_if_error_ttl_s=None):
+        calls.append((url, ttl_s, stale_if_error_ttl_s))
+        return {}, "cached", dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc), []
+
+    monkeypatch.setattr(W, "_fetch_segment", fake_segment)
+    W._collect_days(17.98, 79.58, as_of, "live", 60, [])
+
+    forecast_call = next(call for call in calls if call[0] == W.FORECAST_URL)
+    assert forecast_call == (
+        W.FORECAST_URL,
+        W.LIVE_FORECAST_CACHE_TTL_S,
+        W.LIVE_FORECAST_CACHE_TTL_S,
+    )
 
 
 def test_climatology_comes_from_common_features(monkeypatch):
