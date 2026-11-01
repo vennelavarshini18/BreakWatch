@@ -13,3 +13,16 @@ anthropic
 pytest
 ruff
 python-dotenv
+joblib
+pystac-client
+planetary-computer
+odc-stac
+xarray
+rasterio
+scikit-learn
+lightgbm
+chromadb
+sentence-transformers
+pymupdf
+rank-bm25
+pyarrow
