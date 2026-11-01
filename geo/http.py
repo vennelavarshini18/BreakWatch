@@ -6,7 +6,7 @@ Rules (from the hackathon plan):
   * ALWAYS try live first, unless the caller passes ttl_s > 0 AND a cached copy is younger than ttl_s
     (used for immutable archive calls).
   * If live fails after retries -> serve the last cached copy (quality="cached"), else NetworkUnavailable.
-  * No call to the system "today": fetched_at comes from time.time() (wall-clock stamp of a fetch, not a date decision).
+  * No date decisions here: fetched_at is a wall-clock stamp of the fetch (time.time()), never used to pick which day to analyse.
 """
 from __future__ import annotations
 

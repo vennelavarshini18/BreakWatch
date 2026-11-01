@@ -90,11 +90,11 @@ def _main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--lat", type=float, required=True)
     ap.add_argument("--lon", type=float, required=True)
-    ap.add_argument("--as-of", required=True, help="YYYY-MM-DD or 'today'")
+    ap.add_argument("--as-of", required=True, help="YYYY-MM-DD or 'now'")
     ap.add_argument("--days", type=int, default=30)
     ap.add_argument("--size-m", type=float, default=300.0)
     a = ap.parse_args()
-    if a.as_of == "today":
+    if a.as_of == "now":
         from api.clock import today_utc
         as_of = today_utc()
     else:
