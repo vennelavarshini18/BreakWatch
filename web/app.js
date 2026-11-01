@@ -6,7 +6,6 @@ const state = {
   polygon: null,
   runId: null,
   result: null,
-  sseController: null,
 };
 
 const els = {
@@ -14,8 +13,11 @@ const els = {
   cropInput: document.getElementById('cropInput'),
   soilInput: document.getElementById('soilInput'),
   irrigationInput: document.getElementById('irrigationInput'),
+  polygonFallback: document.getElementById('polygonFallback'),
+  polygonInput: document.getElementById('polygonInput'),
   analyzeBtn: document.getElementById('analyzeBtn'),
   formMeta: document.getElementById('formMeta'),
+  runError: document.getElementById('runError'),
   statusRow: document.getElementById('statusRow'),
   gaugeRing: document.getElementById('gaugeRing'),
   gaugeValue: document.getElementById('gaugeValue'),
@@ -41,6 +43,11 @@ function todayIso() {
 }
 
 function initMap() {
+  if (!window.L) {
+    showPolygonFallback('Map library unavailable. Paste a GeoJSON Polygon to continue.');
+    return;
+  }
+
   state.map = L.map('map', { scrollWheelZoom: false }).fitBounds(TelanganaBounds);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 18,
@@ -49,6 +56,11 @@ function initMap() {
 
   state.drawnItems = new L.FeatureGroup();
   state.map.addLayer(state.drawnItems);
+
+  if (!L.Control || typeof L.Control.Draw !== 'function' || !L.Draw) {
+    showPolygonFallback('Drawing controls unavailable. Paste a GeoJSON Polygon to continue.');
+    return;
+  }
 
   const drawControl = new L.Control.Draw({
     edit: { featureGroup: state.drawnItems },
@@ -59,7 +71,6 @@ function initMap() {
       circle: false,
       marker: false,
       circlemarker: false,
-      marker: false,
     },
   });
 
@@ -69,9 +80,31 @@ function initMap() {
     const layer = event.layer;
     state.drawnItems.clearLayers();
     state.drawnItems.addLayer(layer);
-    state.polygon = layer.toGeoJSON();
+    state.polygon = layer.toGeoJSON().geometry;
     els.formMeta.textContent = 'Polygon ready. Submit for analysis.';
   });
+}
+
+function showPolygonFallback(message) {
+  els.polygonFallback.classList.remove('hidden');
+  els.formMeta.textContent = message;
+}
+
+function polygonFromInput() {
+  const input = els.polygonInput.value.trim();
+  if (!input) return null;
+
+  const parsed = JSON.parse(input);
+  const geometry = parsed.type === 'Feature' ? parsed.geometry : parsed;
+  if (
+    !geometry ||
+    geometry.type !== 'Polygon' ||
+    !Array.isArray(geometry.coordinates) ||
+    geometry.coordinates.length === 0
+  ) {
+    throw new Error('Enter a GeoJSON Polygon with coordinates.');
+  }
+  return geometry;
 }
 
 function setDefaults() {
@@ -146,38 +179,64 @@ function renderForecast(result) {
     return;
   }
 
-  const interval = Array.isArray(forecast.stress_interval) ? forecast.stress_interval : [null, null, null];
-  const values = interval.map((value) => (value == null ? null : Number(value)));
+  const interval = [
+    forecast.ndvi_z_p10,
+    forecast.ndvi_z_p50,
+    forecast.ndvi_z_p90,
+  ].map((value) => (value == null ? null : Number(value)));
+  if (!forecast.validated_for_season || interval.some((value) => value === null)) {
+    els.forecastPanel.textContent =
+      forecast.withheld_reason || 'No validated forecast values are available.';
+    return;
+  }
+
+  const summary = document.createElement('p');
+  summary.textContent =
+    `14-day NDVI-z interval: ${interval[0].toFixed(2)} to ${interval[2].toFixed(2)} ` +
+    `(median ${interval[1].toFixed(2)}).`;
+  els.forecastPanel.innerHTML = '';
+  els.forecastPanel.appendChild(summary);
+  if (forecast.prob_event != null && Number.isFinite(Number(forecast.prob_event))) {
+    const probability = document.createElement('p');
+    probability.textContent =
+      `Probability of NDVI-z at or below -1: ${(Number(forecast.prob_event) * 100).toFixed(1)}%.`;
+    els.forecastPanel.appendChild(probability);
+  }
+
+  if (!window.Chart) {
+    const note = document.createElement('small');
+    note.className = 'muted';
+    note.textContent = 'Chart library unavailable; numeric forecast is shown above.';
+    els.forecastPanel.appendChild(note);
+    return;
+  }
+
   const canvas = document.createElement('canvas');
   canvas.height = 180;
-  els.forecastPanel.innerHTML = '';
   els.forecastPanel.appendChild(canvas);
-
-  if (window.Chart) {
-    new Chart(canvas, {
-      type: 'line',
-      data: {
-        labels: ['low', 'mid', 'high'],
-        datasets: [{
-          label: 'Forecast stress interval',
-          data: values,
-          borderColor: '#0c7b5c',
-          backgroundColor: 'rgba(12, 123, 92, 0.16)',
-          pointRadius: 4,
-          tension: 0.35,
-          fill: true,
-        }],
+  new Chart(canvas, {
+    type: 'line',
+    data: {
+      labels: ['p10', 'p50', 'p90'],
+      datasets: [{
+        label: '14-day NDVI-z forecast interval',
+        data: interval,
+        borderColor: '#0c7b5c',
+        backgroundColor: 'rgba(12, 123, 92, 0.16)',
+        pointRadius: 4,
+        tension: 0.35,
+        fill: true,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        y: { beginAtZero: false },
       },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: { legend: { display: false } },
-        scales: {
-          y: { beginAtZero: false },
-        },
-      },
-    });
-  }
+    },
+  });
 }
 
 function renderWeather(result) {
@@ -226,6 +285,11 @@ function renderWeather(result) {
         scales: { x: { stacked: false }, y: { beginAtZero: false } },
       },
     });
+  } else {
+    const latest = weather[weather.length - 1];
+    els.weatherChart.textContent =
+      `Chart library unavailable. ${weather.length} weather rows loaded through ` +
+      `${latest.day || latest.date || 'the latest available day'}.`;
   }
 }
 
@@ -245,7 +309,20 @@ function parseEvents(result) {
   events.forEach((event) => {
     const text = typeof event === 'string' ? event : event && event.msg ? event.msg : '';
     if (!text) return;
-    const kind = text.includes('module_unavailable') ? 'warn' : text.includes('optical') ? 'info' : text.includes('cached') || text.includes('stale') ? 'warn' : 'ok';
+    const lowerText = text.toLowerCase();
+    let kind = 'ok';
+    if (
+      lowerText.includes('error:') ||
+      lowerText.includes('failed') ||
+      lowerText.includes('unreachable') ||
+      lowerText.includes('module_unavailable') ||
+      lowerText.includes('cached') ||
+      lowerText.includes('stale')
+    ) {
+      kind = 'warn';
+    } else if (lowerText.includes('optical')) {
+      kind = 'info';
+    }
     banners.push({ text, kind });
   });
   return banners;
@@ -282,8 +359,13 @@ function renderTriggers(result) {
     const name = trigger.name || trigger.id || 'Trigger';
     const detail = trigger.detail || '';
     const chunk = trigger.chunk_id || '';
-    li.innerHTML = `<strong>${name}</strong><br>${detail}${chunk ? `<small>Chunk: ${chunk}</small>` : ''}`;
+    const heading = document.createElement('strong');
+    heading.textContent = name;
+    li.append(heading, document.createElement('br'), document.createTextNode(detail));
     if (chunk) {
+      const chunkLabel = document.createElement('small');
+      chunkLabel.textContent = `Chunk: ${chunk}`;
+      li.appendChild(chunkLabel);
       const chip = document.createElement('button');
       chip.type = 'button';
       chip.className = 'citation-chip';
@@ -310,7 +392,11 @@ function renderAdvisory(result) {
   claims.forEach((claim) => {
     const item = document.createElement('div');
     item.className = 'list';
-    item.innerHTML = `<div><strong>${claim.text || 'Advisory claim'}</strong></div>`;
+    const claimText = document.createElement('div');
+    const claimHeading = document.createElement('strong');
+    claimHeading.textContent = claim.text || 'Advisory claim';
+    claimText.appendChild(claimHeading);
+    item.appendChild(claimText);
     const chips = document.createElement('div');
     chips.className = 'citation-row';
     const chunkIds = Array.isArray(claim.chunk_ids) ? claim.chunk_ids : [];
@@ -398,12 +484,20 @@ function openCitation(chunkId, result) {
   const passage = passages.find((item) => item.chunk_id === chunkId) || null;
 
   els.citationTitle.textContent = `ICAR citation: ${chunkId}`;
+  els.citationBody.innerHTML = '';
   if (!passage) {
-    els.citationBody.innerHTML = '<div class="empty">No ICAR passage data was present in this run result.</div>';
+    const empty = document.createElement('div');
+    empty.className = 'empty';
+    empty.textContent = 'No ICAR passage data was present in this run result.';
+    els.citationBody.appendChild(empty);
   } else {
     const text = passage.text || 'No text available.';
     const meta = [passage.doc, passage.district, passage.plan_year, passage.page].filter(Boolean).join(' • ');
-    els.citationBody.innerHTML = `<div>${text}</div><br><small>${meta}</small>`;
+    const passageText = document.createElement('div');
+    passageText.textContent = text;
+    const metadata = document.createElement('small');
+    metadata.textContent = meta;
+    els.citationBody.append(passageText, document.createElement('br'), metadata);
   }
   els.citationModal.classList.add('visible');
 }
@@ -413,13 +507,22 @@ function closeCitation() {
 }
 
 async function handleSubmit() {
-  if (!state.polygon) {
-    alert('Draw a field polygon before submitting.');
+  let polygon = state.polygon;
+  try {
+    polygon = polygon || polygonFromInput();
+  } catch (error) {
+    showRunError(error.message);
     return;
   }
+  if (!polygon) {
+    showRunError('Draw a field polygon or enter a GeoJSON Polygon before submitting.');
+    return;
+  }
+  els.runError.textContent = '';
+  els.runError.classList.add('hidden');
 
   const payload = {
-    polygon: state.polygon,
+    polygon,
     as_of: els.asOfInput.value,
     crop: els.cropInput.value || null,
     soil: els.soilInput.value || null,
@@ -427,31 +530,54 @@ async function handleSubmit() {
   };
 
   els.analyzeBtn.disabled = true;
-  const response = await fetch('/runs', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
+  try {
+    const response = await fetch('/runs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
 
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({ detail: 'Unable to start run.' }));
-    alert(error.detail || 'Unable to start run.');
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ detail: 'Unable to start run.' }));
+      showRunError(formatApiError(error.detail || 'Unable to start run.'));
+      return;
+    }
+
+    const { run_id: runId } = await response.json();
+    state.runId = runId;
+    showStatus([]);
+    await monitorRun(runId);
+  } catch (error) {
+    showRunError(`Analysis request failed: ${error.message}`);
+  } finally {
     els.analyzeBtn.disabled = false;
-    return;
   }
+}
 
-  const { run_id } = await response.json();
-  state.runId = run_id;
-  showStatus([]);
-  await monitorRun(run_id);
-  els.analyzeBtn.disabled = false;
+function formatApiError(detail) {
+  if (Array.isArray(detail)) {
+    return detail.map((item) => item.msg || JSON.stringify(item)).join('; ');
+  }
+  if (detail && typeof detail === 'object') {
+    return JSON.stringify(detail);
+  }
+  return String(detail);
+}
+
+function showRunError(message) {
+  els.runError.textContent = message;
+  els.runError.classList.remove('hidden');
 }
 
 async function monitorRun(runId) {
   const stream = await fetch(`/runs/${runId}/events`);
+  if (!stream.ok || !stream.body) {
+    throw new Error(`Could not read run progress (HTTP ${stream.status}).`);
+  }
   const reader = stream.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
+  const runEvents = [];
 
   while (true) {
     const { value, done } = await reader.read();
@@ -465,7 +591,8 @@ async function monitorRun(runId) {
       if (!eventLine) continue;
       try {
         const payload = JSON.parse(eventLine.replace(/^data:\s*/, ''));
-        showStatus([{ node: payload.node, status: payload.status, msg: payload.msg }]);
+        runEvents.push({ node: payload.node, status: payload.status, msg: payload.msg });
+        showStatus(runEvents);
       } catch (error) {
         // ignore malformed fragments while streaming event updates
       }
@@ -473,10 +600,15 @@ async function monitorRun(runId) {
   }
 
   const result = await fetch(`/runs/${runId}`);
-  if (result.ok) {
-    const json = await result.json();
-    renderResult(json);
+  if (!result.ok) {
+    throw new Error(`Could not load run result (HTTP ${result.status}).`);
   }
+  const json = await result.json();
+  if (json.status === 'error') {
+    showRunError(json.error || 'Analysis failed.');
+    return;
+  }
+  renderResult(json);
 }
 
 function bindEvents() {

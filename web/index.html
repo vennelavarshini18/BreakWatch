@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>BreakWatch</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.4.0/leaflet.draw.css" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css" />
     <style>
       :root {
         --bg: #f4f7fb;
@@ -31,7 +31,7 @@
       h1 { margin: 0 0 16px; font-size: 2rem; }
       .form-grid { display: grid; gap: 12px; }
       label { display: grid; gap: 6px; font-size: 0.9rem; color: var(--muted); }
-      input, select, button { width: 100%; border-radius: 10px; border: 1px solid var(--line); padding: 10px 12px; font-size: 0.95rem; }
+      input, select, textarea, button { width: 100%; border-radius: 10px; border: 1px solid var(--line); padding: 10px 12px; font-size: 0.95rem; }
       button { background: var(--accent); color: white; border: none; cursor: pointer; font-weight: 700; }
       button:disabled { opacity: 0.6; cursor: wait; }
       #map { height: 260px; width: 100%; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
@@ -113,12 +113,18 @@
             Irrigation budget (mm)
             <input id="irrigationInput" type="number" min="0" step="0.1" value="0" />
           </label>
+          <label id="polygonFallback" class="hidden">
+            Field polygon (GeoJSON)
+            <textarea id="polygonInput" rows="4" placeholder='{"type":"Polygon","coordinates":[[[78,17],[78.1,17],[78.1,17.1],[78,17.1],[78,17]]]}'>
+            </textarea>
+          </label>
           <button id="analyzeBtn" type="button">Analyze</button>
         </div>
         <div class="meta" id="formMeta">Draw a field polygon to begin.</div>
       </aside>
 
       <main class="panel main">
+        <div id="runError" class="banner alert hidden" role="alert"></div>
         <div class="status-row" id="statusRow"></div>
 
         <section class="section">
@@ -180,8 +186,8 @@
     </div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.4.0/leaflet.draw.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
-    <script src="./app.js"></script>
+    <script src="./app.js?v=3"></script>
   </body>
 </html>
