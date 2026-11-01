@@ -43,6 +43,8 @@ from typing import Optional
 import joblib
 import numpy as np
 from scipy.stats import norm
+from tqdm import tqdm
+tqdm.monitor_interval = 0
 
 from common import COMMON_VERSION
 from common.features import feature_names
