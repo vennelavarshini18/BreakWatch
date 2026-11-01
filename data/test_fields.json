@@ -1,0 +1,202 @@
+[
+  {
+    "id": "field_dry_2026",
+    "role": "dry_spell",
+    "district": "mahabubnagar",
+    "lat": 16.985,
+    "lon": 78.215,
+    "polygon": {
+      "type": "Polygon",
+      "coordinates": [
+        [
+          [78.214, 16.984],
+          [78.216, 16.984],
+          [78.216, 16.986],
+          [78.214, 16.986],
+          [78.214, 16.984]
+        ]
+      ]
+    },
+    "crop": null,
+    "sowing_date": null,
+    "crop_input_note": "assumed user input (set to null per instruction)",
+    "sowing_date_input_note": "assumed user input (set to null per instruction)",
+    "soil": null,
+    "as_of_dates": [
+      "2026-08-03",
+      "2026-08-10",
+      "2026-08-17",
+      "2026-08-24",
+      "2026-08-31",
+      "2026-09-07",
+      "2026-09-14",
+      "2026-09-17"
+    ],
+    "selection_justification": {
+      "coincides_with_training_point": "pt_0040",
+      "note": "test field location coincides with a training point; temporal split 2015-2020 train / 2023-2025 test prevents target leakage",
+      "longest_run_days": 25,
+      "run_start": "2026-08-24",
+      "run_end": "2026-09-17",
+      "season_rain_mm": 233.7,
+      "assessment": "Severe mid-season dry spell of 25 consecutive days below 2.5 mm in late monsoon."
+    }
+  },
+  {
+    "id": "field_dry_2025",
+    "role": "dry_spell",
+    "district": "khammam",
+    "lat": 16.415,
+    "lon": 80.925,
+    "polygon": {
+      "type": "Polygon",
+      "coordinates": [
+        [
+          [80.924, 16.414],
+          [80.926, 16.414],
+          [80.926, 16.416],
+          [80.924, 16.416],
+          [80.924, 16.414]
+        ]
+      ]
+    },
+    "crop": null,
+    "sowing_date": null,
+    "crop_input_note": "assumed user input (set to null per instruction)",
+    "sowing_date_input_note": "assumed user input (set to null per instruction)",
+    "soil": null,
+    "as_of_dates": [
+      "2025-06-12",
+      "2025-06-19",
+      "2025-06-26",
+      "2025-07-03",
+      "2025-07-10",
+      "2025-07-15"
+    ],
+    "selection_justification": {
+      "coincides_with_training_point": "pt_0015",
+      "note": "test field location coincides with a training point; temporal split 2015-2020 train / 2023-2025 test prevents target leakage",
+      "longest_run_days": 13,
+      "run_start": "2025-07-03",
+      "run_end": "2025-07-15",
+      "season_rain_mm": 726.4,
+      "assessment": "Moderate dry spell of 13 days in July. Honest note: 2025 was an exceptionally wet monsoon year across Telangana (>700 mm); this was the single longest dry run found in the 28 weather points."
+    }
+  },
+  {
+    "id": "field_dry_2024",
+    "role": "dry_spell",
+    "district": "medak",
+    "lat": 17.705,
+    "lon": 78.775,
+    "polygon": {
+      "type": "Polygon",
+      "coordinates": [
+        [
+          [78.774, 17.704],
+          [78.776, 17.704],
+          [78.776, 17.706],
+          [78.774, 17.706],
+          [78.774, 17.704]
+        ]
+      ]
+    },
+    "crop": null,
+    "sowing_date": null,
+    "crop_input_note": "assumed user input (set to null per instruction)",
+    "sowing_date_input_note": "assumed user input (set to null per instruction)",
+    "soil": null,
+    "as_of_dates": [
+      "2024-08-20",
+      "2024-08-27",
+      "2024-09-03",
+      "2024-09-10",
+      "2024-09-17",
+      "2024-09-20"
+    ],
+    "selection_justification": {
+      "coincides_with_training_point": "pt_0043",
+      "note": "test field location coincides with a training point; temporal split 2015-2020 train / 2023-2025 test prevents target leakage",
+      "longest_run_days": 11,
+      "run_start": "2024-09-10",
+      "run_end": "2024-09-20",
+      "season_rain_mm": 886.9,
+      "assessment": "Late-monsoon dry spell of 11 days in September. Honest note: 2024 was very wet (>800 mm season rain); this 11-day run was the longest dry spell observed."
+    }
+  },
+  {
+    "id": "field_control_mahabubnagar",
+    "role": "control",
+    "district": "mahabubnagar",
+    "lat": 16.735,
+    "lon": 77.745,
+    "polygon": {
+      "type": "Polygon",
+      "coordinates": [
+        [
+          [77.744, 16.734],
+          [77.746, 16.734],
+          [77.746, 16.736],
+          [77.744, 16.736],
+          [77.744, 16.734]
+        ]
+      ]
+    },
+    "crop": null,
+    "sowing_date": null,
+    "crop_input_note": "assumed user input (set to null per instruction)",
+    "sowing_date_input_note": "assumed user input (set to null per instruction)",
+    "soil": null,
+    "as_of_dates": [
+      "2026-07-01",
+      "2026-07-08",
+      "2026-07-15",
+      "2026-07-22",
+      "2026-07-29"
+    ],
+    "selection_justification": {
+      "coincides_with_training_point": "pt_0037",
+      "note": "test field location coincides with a training point; temporal split 2015-2020 train / 2023-2025 test prevents target leakage",
+      "longest_run_days": 9,
+      "run_start": "2026-07-08",
+      "run_end": "2026-07-16",
+      "season_rain_mm": 341.8,
+      "assessment": "Control field in the same district as field_dry_2026 (Mahabubnagar). Longest dry run in 2026 was only 9 days (< 10 days rule)."
+    }
+  },
+  {
+    "id": "field_cloudy_placeholder",
+    "role": "cloudy_placeholder",
+    "district": "karimnagar",
+    "lat": 18.455,
+    "lon": 78.755,
+    "polygon": {
+      "type": "Polygon",
+      "coordinates": [
+        [
+          [78.754, 18.454],
+          [78.756, 18.454],
+          [78.756, 18.456],
+          [78.754, 18.456],
+          [78.754, 18.454]
+        ]
+      ]
+    },
+    "crop": null,
+    "sowing_date": null,
+    "crop_input_note": "assumed user input (set to null per instruction)",
+    "sowing_date_input_note": "assumed user input (set to null per instruction)",
+    "soil": null,
+    "as_of_dates": [],
+    "selection_justification": {
+      "coincides_with_training_point": "pt_0012",
+      "note": "test field location coincides with a training point; temporal split 2015-2020 train / 2023-2025 test prevents target leakage",
+      "longest_run_days": null,
+      "run_start": null,
+      "run_end": null,
+      "season_rain_mm": null,
+      "assessment": "Placeholder for cloudy field; optical cloud-cover evaluation will be coordinated with P1 Sentinel-2 analysis."
+    }
+  }
+]
+
