@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
 from common.ledger import Ledger, ledger_add, run_ledger
+from contracts import Evidence
 
 
 def test_ledger_ids_are_sequential():
@@ -33,3 +34,22 @@ def test_context_isolation_between_ledgers():
         assert second.get("ev_001").value == 2.0
 
     assert first.get("ev_001").value == 1.0
+
+
+def test_merge_keeps_unique_evidence_and_preserves_existing_entries():
+    ledger = Ledger()
+    first = ledger.add("rain", 2.5, source="test")
+    second = Evidence(
+        id="ev_099",
+        key="temp",
+        value=18.0,
+        source="test",
+        fetched_at=datetime(2024, 1, 15, 12, 0, tzinfo=timezone.utc),
+        quality="live",
+    )
+
+    added = ledger.merge([first, second])
+    assert [item.id for item in added] == ["ev_099"]
+    assert len(ledger.all()) == 2
+    assert ledger.get(first.id).value == 2.5
+    assert ledger.get(second.id).value == 18.0

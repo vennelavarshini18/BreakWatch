@@ -55,6 +55,22 @@ class Ledger:
         with self._lock:
             return self._entries.get(evidence_id)
 
+    def merge(self, items: Iterable[Evidence]) -> list[Evidence]:
+        with self._lock:
+            added: list[Evidence] = []
+            for item in items:
+                if not isinstance(item, Evidence):
+                    continue
+                if item.id in self._entries:
+                    continue
+                self._entries[item.id] = item
+                self._by_key.setdefault(item.key, []).append(item)
+                added.append(item)
+            return added
+
+    def lookup(self, evidence_id: str) -> Evidence | None:
+        return self.get(evidence_id)
+
     def all(self) -> list[Evidence]:
         with self._lock:
             return list(self._entries.values())
