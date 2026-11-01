@@ -2,8 +2,6 @@
 
 FieldPulse is a field-level monsoon dry-spell early-warning and advisory prototype for Telangana, India. The codebase implements the BreakWatch pipeline: it ingests weather and satellite inputs, validates field data, evaluates ICAR district contingency triggers, and serves a deterministic advisory through the API and web UI.
 
-## Why this project exists
-
 - The system is designed for monsoon stress detection during the kharif season.
 - It combines rainfall, soil moisture, and remote-sensing signals with district contingency rules.
 - It keeps the app safe when a source is missing: unavailable modules surface explicit unavailable/error states instead of fabricating numbers.
@@ -29,17 +27,6 @@ flowchart LR
     F --> G[Generate advisory + risk]
     G --> H[Serve via API / UI]
 ```
-
-## Current status
-
-This repository is a validated prototype / handoff state rather than a production operation system.
-
-- P1 geo/weather data flow and quality checks are in place.
-- P2 trigger and retrieval logic are present and tested.
-- P3 API and UI shell are implemented and are safe when upstream services fail.
-- Some modules are intentionally stub-safe and will report unavailable instead of returning synthetic values.
-
-The current model metadata is stored in `data/model/model_card.json`, and forecast/advisory outputs are gated on that metadata and season validation.
 
 ## Data sources
 
@@ -94,10 +81,6 @@ FieldPulse/
 ├── README.md
 └── STATUS_*.md     # milestone status notes
 ```
-
-## Model and forecast gating
-
-Forecasts are not shown unless the metadata and season checks pass. The project uses `data/model/model_card.json` to validate whether a season is trusted for prediction; otherwise the app keeps the result withheld with a reason instead of making a guess.
 
 ## Limitations
 
