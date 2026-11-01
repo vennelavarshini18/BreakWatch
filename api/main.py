@@ -78,6 +78,12 @@ async def _run_pipeline(run_id: str, payload: RunRequest) -> None:
             mode=resolve_mode(payload.as_of),
         )
         await _write_event(run_id, "validate", "done", "field accepted")
+        await _write_event(
+            run_id,
+            "observations",
+            "start",
+            "loading weather and satellite observations; this may take up to 3 minutes",
+        )
         result = await asyncio.to_thread(
             run_graph,
             field,

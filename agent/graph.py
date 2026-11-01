@@ -6,7 +6,6 @@ from pathlib import Path
 
 from agent.tools import safe_call
 from common import COMMON_VERSION
-from common.baseline import forecast_stress_interval
 from common.ledger import run_ledger
 from config import INSUFFICIENT_STD, RISK_P_HIGH, RISK_P_WATCH, season_of
 from contracts import Advisory, Claim, FieldInput, FusedState
@@ -15,6 +14,8 @@ from geo.weather import centroid_of
 from ml.forecast import forecast as forecast_model
 from ml.rag import retrieve
 from ml.triggers import check_triggers
+
+OBSERVATION_TIMEOUT_SECONDS = 180.0
 
 
 def _model_card_path() -> Path:
@@ -113,7 +114,12 @@ def run_graph(field: FieldInput, *, evidence=None, passages=None, events=None) -
         risk = "insufficient_data"
         ledger_items = list(L.all())
 
-        bundle_result, bundle_events = safe_call("geo.build_observations", build_observations, field, timeout=20.0)
+        bundle_result, bundle_events = safe_call(
+            "geo.build_observations",
+            build_observations,
+            field,
+            timeout=OBSERVATION_TIMEOUT_SECONDS,
+        )
         events.extend(bundle_events)
         bundle = bundle_result
         if bundle is not None:

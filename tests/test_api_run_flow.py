@@ -35,6 +35,7 @@ def test_runs_create_and_return_result(monkeypatch):
     assert events.status_code == 200
     body = events.text
     assert 'event: update' in body
+    assert 'loading weather and satellite observations' in body
     assert 'data:' in body
     final = client.get(f'/runs/{run_id}')
     assert final.status_code == 200

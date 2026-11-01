@@ -18,6 +18,7 @@ const els = {
   analyzeBtn: document.getElementById('analyzeBtn'),
   formMeta: document.getElementById('formMeta'),
   runError: document.getElementById('runError'),
+  dataWarning: document.getElementById('dataWarning'),
   statusRow: document.getElementById('statusRow'),
   gaugeRing: document.getElementById('gaugeRing'),
   gaugeValue: document.getElementById('gaugeValue'),
@@ -132,7 +133,9 @@ function showStatus(events) {
   unique.slice(0, 8).forEach((event) => {
     const badge = document.createElement('span');
     badge.className = 'badge';
-    badge.textContent = `${event.node}:${event.status}`;
+    badge.textContent = event.node === 'observations' && event.status === 'start'
+      ? 'Loading weather and satellite data'
+      : `${event.node}:${event.status}`;
     els.statusRow.appendChild(badge);
   });
 }
@@ -442,6 +445,18 @@ function renderSourceChips(result) {
 
 function renderResult(result) {
   state.result = result || {};
+  const observationError = (Array.isArray(state.result.events) ? state.result.events : [])
+    .find((event) => typeof event === 'string' && event.includes('error:geo.build_observations:'));
+  if (observationError) {
+    const timedOut = observationError.includes(':timeout:');
+    els.dataWarning.textContent = timedOut
+      ? 'Weather and satellite data loading timed out. No observations were used, so this result cannot provide a reliable field assessment. Check your connection or provider availability, then retry.'
+      : `Weather and satellite data are unavailable (${observationError}). No observations were used, so this result is incomplete. Check provider availability and retry.`;
+    els.dataWarning.classList.remove('hidden');
+  } else {
+    els.dataWarning.textContent = '';
+    els.dataWarning.classList.add('hidden');
+  }
   els.statusRow.innerHTML = '';
   const badge = document.createElement('span');
   badge.className = `badge ${state.result.risk_level === 'low' ? 'low' : state.result.risk_level === 'watch' ? 'watch' : state.result.risk_level === 'high' ? 'high' : 'insufficient'}`;
@@ -520,6 +535,8 @@ async function handleSubmit() {
   }
   els.runError.textContent = '';
   els.runError.classList.add('hidden');
+  els.dataWarning.textContent = '';
+  els.dataWarning.classList.add('hidden');
 
   const payload = {
     polygon,
