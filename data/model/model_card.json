@@ -18,7 +18,7 @@
     "doy_cos"
   ],
   "horizon_days": 14,
-  "conformal_q": 0.964435,
+  "conformal_q": 1.010664,
   "split_years": {
     "train": [
       2015,
@@ -36,42 +36,43 @@
   "target_rule": "Weekly Monday samples t in 2015-2025. Target = NDVI-z at t+14d from linear interpolation of z-scores of quality-OK MODIS composites between their END dates. Event = target_z <= -1.0. Samples dropped if ndvi_z feature is None or target cannot be formed.",
   "districts_used": [
     "Adilabad",
-    "Hyderabad"
+    "Hyderabad",
+    "Karimnagar"
   ],
-  "n_points": 10,
-  "n_rows_train": 784,
-  "n_rows_calib": 345,
-  "n_rows_test": 497,
+  "n_points": 12,
+  "n_rows_train": 1031,
+  "n_rows_calib": 437,
+  "n_rows_test": 618,
   "seasons": {
     "kharif": {
-      "n": 98,
-      "mae_model": 0.793923,
-      "mae_persistence": 0.649784,
-      "mae_climatology": 1.321695,
-      "skill": -0.221825,
-      "coverage_80pct": 0.663265,
-      "auroc": 0.666667,
+      "n": 125,
+      "mae_model": 0.759614,
+      "mae_persistence": 0.642376,
+      "mae_climatology": 1.25123,
+      "skill": -0.182506,
+      "coverage_80pct": 0.68,
+      "auroc": 0.658537,
       "validated": false
     },
     "rabi": {
-      "n": 220,
-      "mae_model": 0.624104,
-      "mae_persistence": 0.588663,
-      "mae_climatology": 0.59248,
-      "skill": -0.060206,
-      "coverage_80pct": 0.768182,
-      "auroc": 0.80425,
+      "n": 270,
+      "mae_model": 0.695115,
+      "mae_persistence": 0.699447,
+      "mae_climatology": 0.658702,
+      "skill": 0.006195,
+      "coverage_80pct": 0.748148,
+      "auroc": 0.7618,
       "validated": false
     },
     "summer": {
-      "n": 179,
-      "mae_model": 0.692544,
-      "mae_persistence": 0.654048,
-      "mae_climatology": 0.85239,
-      "skill": -0.058858,
-      "coverage_80pct": 0.743017,
+      "n": 223,
+      "mae_model": 0.690396,
+      "mae_persistence": 0.775146,
+      "mae_climatology": 0.937672,
+      "skill": 0.109334,
+      "coverage_80pct": 0.757848,
       "auroc": null,
-      "validated": false
+      "validated": true
     }
   }
 }
