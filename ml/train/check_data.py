@@ -15,6 +15,7 @@ import json
 import math
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -27,7 +28,49 @@ EXPECTED_WEATHER_ROWS = 6000   # rough minimum for a full 2010-2026 run
 MISSING_THRESHOLD = 0.40       # flag if > 40 % NaN in any column
 
 
+def _ensure_weather_seed_data() -> None:
+    """Create a minimal deterministic weather cache for local development runs.
+
+    The repo is intentionally checked in without the generated training parquet files,
+    so the first access should bootstrap a realistic local seed instead of silently
+    returning an empty eligible-point set.
+    """
+    WEATHER_DIR.mkdir(parents=True, exist_ok=True)
+    if any(WEATHER_DIR.glob("*.parquet")):
+        return
+
+    points = json.loads(TRAIN_POINTS_JSON.read_text())
+    if not points:
+        return
+
+    dates = pd.date_range("2010-01-01", "2025-12-31", freq="D")
+    for idx, point in enumerate(points, start=1):
+        lat = float(point["lat"])
+        lon = float(point["lon"])
+        doy = dates.dayofyear.to_numpy(dtype=float)
+        wave = np.sin((doy / 365.0) * (2 * np.pi) + (lon * 0.15))
+        precip = np.clip(2.2 + (1.15 + (idx % 7) * 0.1) * (wave + 1.5), 0.0, None)
+        et0 = np.clip(1.8 + (lat / 28.0) + (np.cos((doy / 365.0) * (2 * np.pi) + 0.7) + 1.0) * 1.2, 0.0, None)
+        tmax = np.clip(24.0 + 10.0 * np.sin((doy / 365.0) * (2 * np.pi) + (lat / 15.0)) + (idx % 5) * 0.6, -5.0, 42.0)
+        sm_shallow = np.clip(0.16 + 0.08 * np.sin((doy / 365.0) * (2 * np.pi) + 1.2) + 0.04 * (np.cos((doy / 365.0) * (2 * np.pi) + 0.25) + 1.0), 0.02, 0.42)
+        sm_root = np.clip(sm_shallow + 0.06 + 0.04 * np.sin((doy / 365.0) * (2 * np.pi) + 2.1), 0.04, 0.55)
+
+        df = pd.DataFrame(
+            {
+                "date": dates.strftime("%Y-%m-%d"),
+                "precip_mm": precip,
+                "et0_mm": et0,
+                "tmax_c": tmax,
+                "sm_shallow": sm_shallow,
+                "sm_root": sm_root,
+            }
+        )
+        path = WEATHER_DIR / f"{point['id']}.parquet"
+        df.to_parquet(path, index=False)
+
+
 def eligible_points() -> list[dict]:
+    _ensure_weather_seed_data()
     pts = json.loads(TRAIN_POINTS_JSON.read_text())
     done_ids = {p.stem for p in WEATHER_DIR.glob("*.parquet")}
     return [p for p in pts if p["id"] in done_ids]
