@@ -1,4 +1,4 @@
-const TelanganaBounds = [[12.5, 76.5], [19.9, 82.5]];
+const TelanganaBounds = [[15.7, 76.8], [19.9, 81.8]];
 
 const state = {
   map: null,
@@ -35,6 +35,8 @@ const els = {
   citationTitle: document.getElementById('citationTitle'),
   citationBody: document.getElementById('citationBody'),
   closeCitationModal: document.getElementById('closeCitationModal'),
+  resultsPanel: document.getElementById('resultsPanel'),
+  mapStage: document.getElementById('mapStage'),
 };
 
 function todayIso() {
@@ -49,7 +51,8 @@ function initMap() {
     return;
   }
 
-  state.map = L.map('map', { scrollWheelZoom: false }).fitBounds(TelanganaBounds);
+  state.map = L.map('map', { scrollWheelZoom: false, zoomControl: false }).fitBounds(TelanganaBounds);
+  L.control.zoom({ position: 'bottomright' }).addTo(state.map);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 18,
     attribution: '&copy; OpenStreetMap contributors',
@@ -64,9 +67,17 @@ function initMap() {
   }
 
   const drawControl = new L.Control.Draw({
+    position: 'topright',
     edit: { featureGroup: state.drawnItems },
     draw: {
-      polygon: true,
+      polygon: {
+        shapeOptions: {
+          color: '#0b765d',
+          fillColor: '#35a66f',
+          fillOpacity: 0.24,
+          weight: 2,
+        },
+      },
       polyline: false,
       rectangle: false,
       circle: false,
@@ -113,7 +124,8 @@ function setDefaults() {
 }
 
 function modeBadge(result) {
-  const mode = result && result.mode ? result.mode : 'replay';
+  if (!result || !result.mode) return 'READY TO ANALYZE';
+  const mode = result.mode;
   if (mode === 'live') return 'LIVE';
   const asOf = (result && result.field && result.field.as_of) || els.asOfInput.value;
   return `REPLAY . as of ${asOf} . real archived data, no look-ahead`;
@@ -630,6 +642,16 @@ async function monitorRun(runId) {
 
 function bindEvents() {
   els.analyzeBtn.addEventListener('click', handleSubmit);
+  document.querySelectorAll('.rail-action[data-target]').forEach((button) => {
+    button.addEventListener('click', () => {
+      document.querySelectorAll('.rail-action[data-target]').forEach((item) => item.classList.remove('active'));
+      button.classList.add('active');
+      const target = document.getElementById(button.dataset.target);
+      if (target === els.resultsPanel) target.scrollTop = 0;
+      target?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+      if (target === els.mapStage && state.map) state.map.invalidateSize();
+    });
+  });
   els.closeCitationModal.addEventListener('click', closeCitation);
   els.citationModal.addEventListener('click', (event) => {
     if (event.target === els.citationModal) closeCitation();
@@ -639,6 +661,6 @@ function bindEvents() {
 document.addEventListener('DOMContentLoaded', () => {
   setDefaults();
   initMap();
-  renderResult({ risk_level: 'insufficient_data', mode: 'replay', forecast: { withheld_reason: 'Awaiting forecast model validation.' }, events: [], ledger: [], weather_daily: [], climatology: {}, trigger_list: [], advisory: { claims: [] } });
+  renderResult({ risk_level: 'insufficient_data', forecast: { withheld_reason: 'Awaiting forecast model validation.' }, events: [], ledger: [], weather_daily: [], climatology: {}, trigger_list: [], advisory: { claims: [] } });
   bindEvents();
 });
