@@ -211,15 +211,20 @@ def _collect_days(lat, lon, as_of, mode, lookback_days, events):
 
     if mode == "live":
         past = min(92, max(FORECAST_PAST_DAYS, (as_of - arch_end).days))
-        recs, q, fa, ev = _fetch_segment(FORECAST_URL, lat, lon,
-                                         {"past_days": past, "forecast_days": FORECAST_DAYS},
-                                         LIVE_FORECAST_CACHE_TTL_S,
-                                         stale_if_error_ttl_s=LIVE_FORECAST_CACHE_TTL_S)
-        events += ev
-        last = as_of + _D(days=FORECAST_DAYS - 1)
-        for day, rec in recs.items():
-            if arch_end < day <= last and day >= start and _has_data(rec):
-                merged[day] = (rec, "open-meteo:forecast", q, fa)
+        try:
+            recs, q, fa, ev = _fetch_segment(FORECAST_URL, lat, lon,
+                                             {"past_days": past, "forecast_days": FORECAST_DAYS},
+                                             LIVE_FORECAST_CACHE_TTL_S,
+                                             stale_if_error_ttl_s=LIVE_FORECAST_CACHE_TTL_S)
+            events += ev
+            last = as_of + _D(days=FORECAST_DAYS - 1)
+            for day, rec in recs.items():
+                if arch_end < day <= last and day >= start and _has_data(rec):
+                    merged[day] = (rec, "open-meteo:forecast", q, fa)
+        except (NetworkUnavailable, ApiError) as e:
+            events.append(f"forecast_failed:{type(e).__name__}")
+            if not merged:
+                raise
 
     last_obs = as_of - _D(days=1) if mode == "live" else as_of
     missing = sum(1 for i in range((last_obs - start).days + 1) if (start + _D(days=i)) not in merged)

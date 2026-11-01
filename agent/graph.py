@@ -62,11 +62,11 @@ def _risk_from_fused(fused: FusedState | None, unavailable: bool = False, stale:
     return "high"
 
 
-def _default_advisory() -> Advisory:
+def _default_advisory(chunk_ids: list[str] | None = None) -> Advisory:
     claim = Claim(
         text="The system has insufficient data for a confident field advisory at this time.",
         evidence_ids=[],
-        chunk_ids=[],
+        chunk_ids=chunk_ids or [],
     )
     return Advisory(risk_level="insufficient_data", claims=[claim], abstained=True, verifier_passes=0)
 
@@ -76,6 +76,8 @@ def _normalize_advisory(risk_level: str, evidence_ids: list[str], chunk_ids: lis
         text = fallback_text or "The current field conditions are being tracked with the most recent validated evidence and retrieved guidance."
         claim = Claim(text=text, evidence_ids=evidence_ids, chunk_ids=chunk_ids)
         return Advisory(risk_level=risk_level, claims=[claim], abstained=False, verifier_passes=1)
+    if chunk_ids:
+        return _default_advisory(chunk_ids=chunk_ids)
     return _default_advisory()
 
 
