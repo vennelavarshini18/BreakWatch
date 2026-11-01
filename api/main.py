@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import uuid
 from datetime import date
@@ -92,17 +93,22 @@ async def create_run(payload: RunRequest):
 @app.get("/runs/{run_id}/events")
 async def runs_events(run_id: str):
     async def stream():
+        sent_count = 0
         while True:
             run = app.state.runs.get(run_id)
             if run is None:
                 break
-            if run["events"]:
-                for event in run["events"]:
-                    if event.get("_sent"):
-                        continue
-                    event["_sent"] = True
-                    payload = {"node": event["node"], "status": event["status"], "msg": event["msg"], "ts": _now().isoformat()}
-                    yield f"event: update\ndata: {payload}\n\n"
+            events = run["events"]
+            if events:
+                for event in events[sent_count:]:
+                    payload = {
+                        "node": event["node"],
+                        "status": event["status"],
+                        "msg": event["msg"],
+                        "ts": _now().isoformat(),
+                    }
+                    yield f"event: update\ndata: {json.dumps(payload)}\n\n"
+                    sent_count += 1
             if run["done"]:
                 break
             await asyncio.sleep(0.1)

@@ -4,11 +4,17 @@ import json
 from datetime import date
 from pathlib import Path
 
+from agent.tools import safe_call
 from common import COMMON_VERSION
 from common.baseline import forecast_stress_interval
 from common.ledger import run_ledger
 from config import INSUFFICIENT_STD, RISK_P_HIGH, RISK_P_WATCH, season_of
 from contracts import Advisory, Claim, FieldInput, FusedState
+from geo import build_observations
+from geo.weather import centroid_of
+from ml.forecast import forecast as forecast_model
+from ml.rag import retrieve
+from ml.triggers import check_triggers
 
 
 def _model_card_path() -> Path:
@@ -64,15 +70,34 @@ def _default_advisory() -> Advisory:
     return Advisory(risk_level="insufficient_data", claims=[claim], abstained=True, verifier_passes=0)
 
 
-def _normalize_advisory(risk_level: str, evidence_ids: list[str], chunk_ids: list[str]) -> Advisory:
+def _normalize_advisory(risk_level: str, evidence_ids: list[str], chunk_ids: list[str], fallback_text: str | None = None) -> Advisory:
     if chunk_ids and evidence_ids:
-        claim = Claim(
-            text="The current field conditions are being tracked with the most recent validated evidence and retrieved guidance.",
-            evidence_ids=evidence_ids,
-            chunk_ids=chunk_ids,
-        )
+        text = fallback_text or "The current field conditions are being tracked with the most recent validated evidence and retrieved guidance."
+        claim = Claim(text=text, evidence_ids=evidence_ids, chunk_ids=chunk_ids)
         return Advisory(risk_level=risk_level, claims=[claim], abstained=False, verifier_passes=1)
     return _default_advisory()
+
+
+def _resolve_district(field: FieldInput) -> str | None:
+    if field.district:
+        return field.district.strip().lower()
+    try:
+        lat, lon = centroid_of(field.polygon)
+    except Exception:
+        return None
+    options = {
+        "adilabad": (19.07, 78.53),
+        "karimnagar": (18.43, 79.12),
+        "khammam": (17.25, 80.14),
+        "mahabubnagar": (16.75, 77.98),
+        "medak": (18.05, 78.26),
+        "nalgonda": (17.06, 79.27),
+        "nizamabad": (18.67, 78.10),
+        "rangareddy": (17.34, 78.87),
+        "warangal": (17.97, 79.60),
+    }
+    best_name, _ = min(options.items(), key=lambda item: (lat - item[1][0]) ** 2 + (lon - item[1][1]) ** 2)
+    return best_name
 
 
 def run_graph(field: FieldInput, *, evidence=None, passages=None, events=None) -> dict:
@@ -83,55 +108,97 @@ def run_graph(field: FieldInput, *, evidence=None, passages=None, events=None) -
         if evidence:
             L.merge(evidence)
 
+        field.district = _resolve_district(field) or field.district
         mode = field.mode or "replay"
         risk = "insufficient_data"
-        advisory = _default_advisory()
         ledger_items = list(L.all())
 
-        forecast_allowed, withheld_reason = _forecast_allowed(field.as_of)
-        forecast = {"withheld_reason": withheld_reason or "not applicable"}
-        if forecast_allowed:
-            card = _load_model_card()
-            fc_values = card.get("forecast", {}) if isinstance(card, dict) else {}
-            lo, mid, hi = forecast_stress_interval(fc_values)
-            forecast = {"withheld_reason": None, "stress_interval": [lo, mid, hi]}
+        bundle_result, bundle_events = safe_call("geo.build_observations", build_observations, field, timeout=20.0)
+        events.extend(bundle_events)
+        bundle = bundle_result
+        if bundle is not None:
+            bundle.field = field
+            if bundle.events:
+                events.extend(bundle.events)
+            if bundle.evidence:
+                L.merge(bundle.evidence)
 
-        if evidence:
-            risk = "low"
+        trigger_list = []
+        if bundle is not None and bundle.weather_daily:
+            trigger_list = check_triggers(bundle)
+            trigger_payload = [t.model_dump() if hasattr(t, "model_dump") else t.dict() for t in trigger_list]
+        else:
+            trigger_payload = []
 
-        # Lightweight fused-state risk estimation for the graph contract; keeps the pipeline safe when P1 data is absent.
-        if evidence and ledger_items:
-            risk = _risk_from_fused(
-                FusedState(
-                    series=[],
-                    latest_mean=0.0,
-                    latest_std=0.0,
-                    p_stress=0.1,
-                    sources_used=[item.key for item in ledger_items[:3]],
-                ),
-                unavailable=False,
-                stale=False,
-            )
+        forecast = {"withheld_reason": "forecast unavailable: no bundle"}
+        forecast_obj = None
+        if bundle is not None:
+            fused_result, fused_events = safe_call("geo.fusion.fuse", __import__("geo.fusion", fromlist=["fuse"]).fuse, bundle, timeout=8.0)
+            events.extend(fused_events)
+            fused = fused_result
+            if fused is not None:
+                risk = _risk_from_fused(fused)
+            else:
+                if trigger_payload and any(t.get("fired") for t in trigger_payload):
+                    risk = "watch"
+                elif trigger_payload:
+                    risk = "low"
+            forecast_obj, forecast_events = safe_call("ml.forecast.forecast", forecast_model, bundle, fused if fused is not None else None, timeout=10.0)
+            events.extend(forecast_events)
+            if forecast_obj is not None:
+                forecast = {
+                    "horizon_days": forecast_obj.horizon_days,
+                    "ndvi_z_p10": forecast_obj.ndvi_z_p10,
+                    "ndvi_z_p50": forecast_obj.ndvi_z_p50,
+                    "ndvi_z_p90": forecast_obj.ndvi_z_p90,
+                    "prob_event": forecast_obj.prob_event,
+                    "model_version": forecast_obj.model_version,
+                    "validated_for_season": forecast_obj.validated_for_season,
+                    "withheld_reason": forecast_obj.withheld_reason,
+                    "evidence_ids": list(forecast_obj.evidence_ids),
+                }
+            else:
+                forecast = {"withheld_reason": "forecast unavailable: model path or data is not valid"}
+
+        if field.district:
+            district_query = "mid season drought" if trigger_payload and any(item.get("fired") for item in trigger_payload) else "drought contingency"
+            retrieved = retrieve(district_query, field.district, crop=field.crop, k=3)
+            if not retrieved:
+                retrieved = retrieve("drought risk management", field.district, crop=field.crop, k=3)
+            passages = retrieved
 
         if passages:
-            chunk_ids = [passage.chunk_id for passage in passages if getattr(passage, "chunk_id", None)]
-            evidence_ids = [item.id for item in ledger_items if item.id]
-            advisory = _normalize_advisory(risk, evidence_ids, chunk_ids)
+            chunk_ids = [p.chunk_id for p in passages if getattr(p, "chunk_id", None)]
+            evidence_ids = [item.id for item in L.all() if item.id]
+            advisory_text = None
+            if trigger_payload and any(item.get("fired") for item in trigger_payload):
+                fired = [item for item in trigger_payload if item.get("fired")]
+                advisory_text = "; ".join(f"{item['name']}: {item['detail']}" for item in fired[:2])
+            if advisory_text is None and passages:
+                advisory_text = passages[0].text[:220]
+            advisory = _normalize_advisory(risk if risk != "insufficient_data" else "watch", evidence_ids, chunk_ids, advisory_text)
+        else:
+            advisory = _default_advisory()
+
+        ledger_items = list(L.all())
+        if risk == "insufficient_data" and trigger_payload and any(item.get("fired") for item in trigger_payload):
+            risk = "watch"
 
         result = {
             "field": field.model_dump() if hasattr(field, "model_dump") else field.dict(),
             "risk_level": risk,
             "advisory": advisory.model_dump() if hasattr(advisory, "model_dump") else advisory.dict(),
             "ledger": [e.model_dump() if hasattr(e, "model_dump") else e.dict() for e in ledger_items],
-            "events": events,
-            "weather_daily": [],
-            "climatology": {},
-            "trigger_list": [],
+            "events": list(events),
+            "weather_daily": [w.model_dump() if hasattr(w, "model_dump") else w.dict() for w in (bundle.weather_daily if bundle is not None else [])],
+            "climatology": (bundle.climatology.model_dump() if bundle is not None and hasattr(bundle.climatology, "model_dump") else (bundle.climatology.dict() if bundle is not None else {})),
+            "trigger_list": trigger_payload,
             "forecast": forecast,
             "mode": mode,
             "trace": ["validate", "plan", "retrieve_data", "quality_gate", "fuse", "analyze", "advise", "verify", "respond"],
+            "passages": [p.model_dump() if hasattr(p, "model_dump") else p.dict() for p in passages],
         }
         return result
 
 
-__all__ = ["run_graph", "_load_model_card", "_forecast_allowed"]
+__all__ = ["run_graph", "_load_model_card", "_forecast_allowed", "_resolve_district"]
