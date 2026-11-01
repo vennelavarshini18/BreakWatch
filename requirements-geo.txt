@@ -1,5 +1,10 @@
+httpx
+pydantic
+numpy
+pandas
+shapely
 pystac-client
 planetary-computer
 odc-stac
-rioxarray
 xarray
+rasterio
