@@ -1,0 +1,88 @@
+"""Tests for geo/quality.py and geo/check_bundle.py (pure logic, no network)."""
+import datetime as dt
+from types import SimpleNamespace as NS
+
+from contracts import SensorObs
+from geo.check_bundle import check_bundle
+from geo.quality import quality_gate
+
+D = dt.timedelta
+AS_OF = dt.date(2025, 8, 20)
+
+
+def obs(sensor, days_ago, valid_frac=1.0):
+    return SensorObs(sensor=sensor, day=AS_OF - D(days=days_ago), value=0.5, valid_frac=valid_frac,
+                     n_baseline=5, evidence_id="ev_001")
+
+
+def test_cloudy_optical_switches_to_sar():
+    r = quality_gate([obs("s2_ndvi", 2, 0.1), obs("s1_vh", 3)], AS_OF)
+    assert [o.sensor for o in r.obs] == ["s1_vh"]
+    assert r.switched_to_sar is True and "optical_cloudy->sar" in r.events
+    assert r.stale is False
+
+
+def test_cloudy_without_sar_reports_it():
+    r = quality_gate([obs("s2_ndvi", 2, 0.1)], AS_OF)
+    assert r.obs == [] and "optical_cloudy:no_sar_available" in r.events
+    assert r.switched_to_sar is False
+
+
+def test_valid_frac_exactly_at_threshold_is_kept():
+    r = quality_gate([obs("s2_ndvi", 1, 0.4)], AS_OF)
+    assert len(r.obs) == 1 and not any(e.startswith("optical_cloudy") for e in r.events)
+
+
+def test_clear_optical_kept_even_if_older_cloudy_dropped():
+    r = quality_gate([obs("s2_ndvi", 1, 0.9), obs("s2_ndvi", 4, 0.1), obs("s1_vh", 2)], AS_OF)
+    assert len(r.obs) == 2 and r.switched_to_sar is False
+
+
+def test_stale_after_12_days():
+    r = quality_gate([obs("s2_ndvi", 13)], AS_OF)
+    assert "stale:s2_ndvi:13d" in r.events and r.stale is True
+
+
+def test_12_days_is_still_fresh():
+    r = quality_gate([obs("s2_ndvi", 12)], AS_OF)
+    assert r.stale is False and r.fresh_sensors == ["s2_ndvi"]
+
+
+def test_modis_composite_16_days_old_is_fresh():
+    r = quality_gate([obs("modis_ndvi", 16)], AS_OF)
+    assert r.stale is False
+
+
+def test_empty_input_is_not_stale_and_has_no_events():
+    r = quality_gate([], AS_OF)
+    assert r.obs == [] and r.events == [] and r.stale is False
+
+
+def test_future_obs_ignored_and_input_not_modified():
+    future = SensorObs(sensor="s2_ndvi", day=AS_OF + D(days=1), value=0.5, valid_frac=1.0, n_baseline=5,
+                       evidence_id="ev_001")
+    data = [future, obs("s1_vh", 1)]
+    r = quality_gate(data, AS_OF)
+    assert [o.sensor for o in r.obs] == ["s1_vh"] and len(data) == 2
+
+
+def _bundle(mode="replay", forecast_rows=0, ensemble=0, drop_evidence=False):
+    ev = [NS(id="geo_001", quality="live")]
+    days = [NS(day=AS_OF - D(days=i), is_forecast=False, evidence_id="geo_001") for i in range(60)]
+    days += [NS(day=AS_OF + D(days=i), is_forecast=True, evidence_id="geo_001") for i in range(forecast_rows)]
+    if drop_evidence:
+        ev = []
+    clim = NS(n_years=15, sm_root_percentile=40.0, rain_deficit_14d_mm=3.0, evidence_ids=["geo_001"])
+    return NS(field=NS(as_of=AS_OF, mode=mode), obs=[], evidence=ev, weather_daily=days,
+              rain_ensemble=[[0.0]] * ensemble, climatology=clim)
+
+
+def test_check_bundle_passes_good_replay_and_live():
+    assert all(ok for _, ok, _ in check_bundle(_bundle("replay")))
+    assert all(ok for _, ok, _ in check_bundle(_bundle("live", forecast_rows=16, ensemble=3)))
+
+
+def test_check_bundle_detects_missing_evidence_and_replay_forecast():
+    failed = {n for n, ok, _ in check_bundle(_bundle("replay", forecast_rows=2, drop_evidence=True)) if not ok}
+    assert "every weather day has an evidence row" in failed
+    assert "replay: no forecast rows" in failed
