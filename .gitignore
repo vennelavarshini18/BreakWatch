@@ -5,3 +5,4 @@ data/cache/
 data/train_raw/
 data/model/chroma/
 *.parquet
+data/corpus/icar/*.pdf
