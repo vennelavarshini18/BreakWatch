@@ -5,8 +5,9 @@ ml/backtest.py — Trigger-based replay check and backtest pipeline.
 CLI Usage:
     python -m ml.backtest --fields field_dry_2026 field_control_mahabubnagar
     python -m ml.backtest --fields field_dry_2026 field_control_mahabubnagar --cache-only
+    python -m ml.backtest --from-disk
 
-Workflow per field and per as_of date:
+Workflow per field and per as_of date (live mode):
   1. Construct FieldInput in 'replay' mode.
   2. geo.build_observations(field) — catches NotImplementedError and network errors
      per date, records the reason, and continues without crashing.
@@ -19,6 +20,15 @@ Workflow per field and per as_of date:
      and lead time vs the first quality-passing MODIS composite with ndvi z <= -1
      (or "no visible drop (composites unusable)" if none; never invent a date).
 
+--from-disk mode (no network):
+  Builds ObsBundle.weather_daily ONLY from data/train_raw/weather/<point_id>.parquet.
+  Does NOT call geo.build_observations, geo.fusion, or ml.forecast.
+  Records "fusion not run in --from-disk mode" for fusion_status.
+  If a field's weather parquet is missing, records the error and continues.
+  Never fabricates values.
+  Outputs: data/backtest_results_disk.csv, data/backtest_summary_disk.md,
+           data/backtest_plots/{field_id}_disk.png
+
 Outputs:
   - data/backtest_results.csv
   - data/backtest_summary.md
@@ -28,16 +38,16 @@ Outputs:
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
-import numpy as np
 import pandas as pd
 
-from contracts import FieldInput, ObsBundle
+from contracts import Evidence, FieldInput, ObsBundle, WeatherDay
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -48,6 +58,7 @@ RESULTS_CSV_PATH = REPO_ROOT / "data" / "backtest_results.csv"
 SUMMARY_MD_PATH = REPO_ROOT / "data" / "backtest_summary.md"
 PLOTS_DIR = REPO_ROOT / "data" / "backtest_plots"
 WEATHER_DIR = REPO_ROOT / "data" / "train_raw" / "weather"
+DISK_WEATHER_SOURCE = "disk archive (Open-Meteo ERA5 download)"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S")
 log = logging.getLogger(__name__)
@@ -76,6 +87,65 @@ def enable_cache_only_mode() -> None:
         pmc._stac_search_all = _no_stac_search
     except Exception:
         pass
+
+
+def _load_disk_weather(
+    point_id: str,
+    as_of: date,
+) -> tuple[list[WeatherDay], list[Evidence]]:
+    """Load archived weather through as_of, preserving its on-disk values."""
+    weather_path = WEATHER_DIR / f"{point_id}.parquet"
+    df = pd.read_parquet(weather_path)
+    if "date" in df.columns:
+        df = df.rename(columns={"date": "day"})
+    if "day" not in df.columns:
+        raise ValueError(f"{weather_path} has no 'date' column")
+
+    df["day"] = pd.to_datetime(df["day"], errors="raise").dt.date
+    df = df[df["day"] <= as_of].sort_values("day")
+
+    fetched_at = dt.datetime.fromtimestamp(weather_path.stat().st_mtime, tz=dt.UTC)
+    evidence_id = f"disk_weather_{point_id}_{as_of.isoformat()}"
+    if df.empty:
+        return [], [
+            Evidence(
+                id=evidence_id,
+                key="weather_daily_series",
+                value=f"0 days through {as_of}",
+                source=DISK_WEATHER_SOURCE,
+                fetched_at=fetched_at,
+                quality="cached",
+                note=f"No archived rows through {as_of} in {weather_path}",
+            )
+        ]
+    evidence = Evidence(
+        id=evidence_id,
+        key="weather_daily_series",
+        value=f"{len(df)} days {df['day'].iloc[0]}..{df['day'].iloc[-1]}",
+        source=DISK_WEATHER_SOURCE,
+        fetched_at=fetched_at,
+        obs_date=df["day"].iloc[-1],
+        quality="cached",
+        note=f"Loaded from {weather_path}",
+    )
+
+    def optional_float(value: Any) -> float | None:
+        return None if pd.isna(value) else float(value)
+
+    weather_days = [
+        WeatherDay(
+            day=record["day"],
+            precip_mm=optional_float(record.get("precip_mm")),
+            et0_mm=optional_float(record.get("et0_mm")),
+            tmax_c=optional_float(record.get("tmax_c")),
+            sm_shallow=optional_float(record.get("sm_shallow")),
+            sm_root=optional_float(record.get("sm_root")),
+            is_forecast=False,
+            evidence_id=evidence_id,
+        )
+        for record in df.to_dict(orient="records")
+    ]
+    return weather_days, [evidence]
 
 
 # ---------------------------------------------------------------------------
@@ -221,13 +291,109 @@ def run_single_replay_step(
     return row
 
 
+def run_single_disk_replay_step(
+    field_cfg: dict,
+    as_of: date,
+) -> dict[str, Any]:
+    """Evaluate one archived-weather-only trigger step for a field."""
+    import ml.triggers
+
+    field_id = field_cfg["id"]
+    row: dict[str, Any] = {
+        "field_id": field_id,
+        "role": field_cfg.get("role", "unknown"),
+        "district": field_cfg.get("district", "unknown"),
+        "as_of": str(as_of),
+        "observation_status": "ok",
+        "mid_season_fired": False,
+        "mid_season_run_length": None,
+        "mid_season_run_start": None,
+        "mid_season_run_end": None,
+        "early_season_fired": False,
+        "triggers_fired": [],
+        "fusion_status": "fusion not run in --from-disk mode",
+        "p_stress": None,
+        "risk_level": None,
+        "forecast_status": "skipped: fusion not run in --from-disk mode",
+        "forecast_p50": None,
+        "sources_used": [],
+        "events": [],
+        "weather_daily": [],
+    }
+
+    point_id = field_cfg.get("selection_justification", {}).get(
+        "coincides_with_training_point"
+    )
+    if not point_id:
+        row["observation_status"] = "missing_training_point_id"
+        row["events"].append("weather_file_missing: no coinciding training point")
+        return row
+
+    sowing_date = (
+        date.fromisoformat(field_cfg["sowing_date"])
+        if field_cfg.get("sowing_date")
+        else None
+    )
+    field_input = FieldInput(
+        polygon=field_cfg["polygon"],
+        as_of=as_of,
+        mode="replay",
+        crop=field_cfg.get("crop"),
+        sowing_date=sowing_date,
+        soil=field_cfg.get("soil"),
+        district=field_cfg.get("district"),
+    )
+
+    try:
+        weather_daily, evidence = _load_disk_weather(point_id, as_of)
+    except FileNotFoundError:
+        row["observation_status"] = f"missing_weather_file: {point_id}.parquet"
+        row["events"].append(f"weather_file_missing:{point_id}.parquet")
+        return row
+    except Exception as exc:
+        row["observation_status"] = f"weather_load_error: {type(exc).__name__}: {exc}"
+        row["events"].append(f"weather_load_failed:{type(exc).__name__}")
+        return row
+
+    bundle = ObsBundle(
+        field=field_input,
+        weather_daily=weather_daily,
+        evidence=evidence,
+    )
+    row["weather_daily"] = bundle.weather_daily
+
+    try:
+        triggers = ml.triggers.check_triggers(bundle)
+        row["triggers_fired"] = [trigger.name for trigger in triggers if trigger.fired]
+        for trigger in triggers:
+            if trigger.id == "mid_season_dry_spell":
+                row["mid_season_fired"] = trigger.fired
+            elif trigger.id == "early_season_dry_spell":
+                row["early_season_fired"] = trigger.fired
+
+        for ev in bundle.evidence:
+            if ev.key == "dry_spell_run_length" and isinstance(ev.value, (int, float)):
+                row["mid_season_run_length"] = int(ev.value)
+            elif ev.key == "dry_spell_run_start":
+                row["mid_season_run_start"] = str(ev.obs_date) if ev.obs_date else str(ev.value)
+            elif ev.key == "dry_spell_run_end":
+                row["mid_season_run_end"] = str(ev.obs_date) if ev.obs_date else str(ev.value)
+    except Exception as exc:
+        row["triggers_fired"] = [f"error: {exc}"]
+        row["events"].append(f"trigger_check_failed:{type(exc).__name__}")
+
+    row["sources_used"] = sorted({ev.source for ev in bundle.evidence if ev.source})
+    return row
+
+
 def run_backtest(
     field_ids: list[str],
     cache_only: bool = False,
-    output_dir: Optional[Path] = None,
+    output_dir: Path | None = None,
+    from_disk: bool = False,
 ) -> tuple[pd.DataFrame, str]:
     """Execute backtest across requested fields and write reports/plots."""
-    if cache_only:
+    if cache_only and not from_disk:
         enable_cache_only_mode()
 
     out_dir = output_dir or (REPO_ROOT / "data")
@@ -238,9 +404,15 @@ def run_backtest(
         all_test_fields = json.load(f)
 
     field_map = {f["id"]: f for f in all_test_fields}
-    target_fields = [field_map[fid] for fid in field_ids if fid in field_map]
+    target_fields = (
+        all_test_fields
+        if from_disk
+        else [field_map[fid] for fid in field_ids if fid in field_map]
+    )
 
     if not target_fields:
+        if from_disk:
+            raise ValueError(f"No fields found in {TEST_FIELDS_JSON}")
         raise ValueError(f"None of the requested fields {field_ids} found in {TEST_FIELDS_JSON}")
 
     log.info("Running backtest for %d field(s): %s", len(target_fields), [f["id"] for f in target_fields])
@@ -257,7 +429,11 @@ def run_backtest(
 
         for as_of_str in as_of_dates:
             as_of_d = date.fromisoformat(as_of_str)
-            res = run_single_replay_step(f_cfg, as_of_d)
+            res = (
+                run_single_disk_replay_step(f_cfg, as_of_d)
+                if from_disk
+                else run_single_replay_step(f_cfg, as_of_d)
+            )
             records.append(res)
 
             # Accumulate weather for plots
@@ -292,18 +468,28 @@ def run_backtest(
         })
 
     df_results = pd.DataFrame(csv_rows)
-    results_csv_file = out_dir / "backtest_results.csv"
+    results_suffix = "_disk" if from_disk else ""
+    results_csv_file = out_dir / f"backtest_results{results_suffix}.csv"
     df_results.to_csv(results_csv_file, index=False)
     log.info("Saved results to %s (%d rows)", results_csv_file, len(df_results))
 
     # Generate Summary Markdown
-    summary_md = _generate_summary_markdown(target_fields, df_results, records)
-    summary_md_file = out_dir / "backtest_summary.md"
+    if from_disk:
+        summary_md = _generate_disk_summary_markdown(target_fields, df_results)
+    else:
+        summary_md = _generate_summary_markdown(target_fields, df_results, records)
+    summary_md_file = out_dir / f"backtest_summary{results_suffix}.md"
     summary_md_file.write_text(summary_md, encoding="utf-8")
     log.info("Saved summary to %s", summary_md_file)
 
     # Generate Plots
-    _generate_plots(target_fields, df_results, field_weather_series, plots_dir)
+    _generate_plots(
+        target_fields,
+        df_results,
+        field_weather_series,
+        plots_dir,
+        from_disk=from_disk,
+    )
 
     return df_results, summary_md
 
@@ -311,6 +497,60 @@ def run_backtest(
 # ---------------------------------------------------------------------------
 # Reporting & Analysis
 # ---------------------------------------------------------------------------
+
+def _generate_disk_summary_markdown(
+    target_fields: list[dict],
+    df_results: pd.DataFrame,
+) -> str:
+    """Summarize the archived-weather trigger-only replay without live claims."""
+    lines = [
+        "# BreakWatch Disk Trigger Replay Summary",
+        "",
+        "This is a **trigger-only replay on archived weather** loaded from "
+        "`data/train_raw/weather/<point_id>.parquet`.",
+        "",
+        "- Weather source: `disk archive (Open-Meteo ERA5 download)`.",
+        "- No network API, observation builder, fusion, or forecast was run.",
+        "- Fusion status: `fusion not run in --from-disk mode`.",
+        "- Trigger thresholds were not tuned.",
+        "- A fired trigger confirms a dry spell **already 15 days long**; it is "
+        "**not an early forecast**.",
+        "- No stress result or lead-time result exists in this replay.",
+        "",
+        f"- **Fields in test set**: {len(target_fields)}",
+        f"- **as_of dates evaluated**: {len(df_results)}",
+        "",
+        "## Per-field results",
+        "",
+        "| Field | as_of dates | Mid-season fires | Missing weather dates |",
+        "|---|---:|---:|---:|",
+    ]
+    for field_cfg in target_fields:
+        field_id = field_cfg["id"]
+        rows = df_results[df_results["field_id"] == field_id]
+        missing_count = rows["observation_status"].astype(str).str.startswith(
+            "missing_weather_file"
+        ).sum()
+        fired_count = rows["mid_season_fired"].fillna(False).astype(bool).sum()
+        lines.append(
+            f"| `{field_id}` | {len(rows)} | {fired_count} | {missing_count} |"
+        )
+
+    lines.extend(
+        [
+            "",
+            "## Interpretation limits",
+            "",
+            "The trigger is retrospective: a firing confirms a dry spell that has "
+            "already lasted 15 days and is not an early forecast. Fusion was not "
+            "run, so no crop-stress probability or stress classification is "
+            "available. No lead-time result exists because this run did not "
+            "evaluate a forecast or sensor-fusion onset.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
 
 def _generate_summary_markdown(
     target_fields: list[dict],
@@ -379,7 +619,7 @@ def _generate_summary_markdown(
             fired_rows = sub[(sub["mid_season_fired"] == True) | (sub["early_season_fired"] == True)]
             false_alarms = len(fired_rows)
             total_ctrl_dates = len(sub)
-            lines.append(f"- **Control Verification**: Field has no runs ≥ 10 dry days in evaluation window.")
+            lines.append("- **Control Verification**: Field has no runs ≥ 10 dry days in evaluation window.")
             lines.append(f"- **False Alarms**: **{false_alarms} / {total_ctrl_dates}** dates fired.")
             if false_alarms == 0:
                 lines.append("  - ✓ Perfect control separation: 0 false alarms across all evaluation dates.")
@@ -424,7 +664,7 @@ def _generate_summary_markdown(
     lines.append("  - STAC search: **1 search call per as_of date**.")
     lines.append("  - COG reads: ~3 window extractions per uncached composite.")
     lines.append("")
-    lines.append(f"**Total API Calls for standard 2-field run (13 dates total)**:")
+    lines.append("**Total API Calls for standard 2-field run (13 dates total)**:")
     lines.append("- Open-Meteo Archive: 2 climatology + 13 segment calls = **15 requests**.")
     lines.append("- Planetary Computer STAC: **13 search requests**.")
     lines.append("")
@@ -461,6 +701,8 @@ def _generate_plots(
     df_results: pd.DataFrame,
     field_weather_series: dict[str, dict[date, float]],
     plots_dir: Path,
+    *,
+    from_disk: bool = False,
 ) -> None:
     """Generate one chart per field illustrating precipitation and trigger events."""
     try:
@@ -479,7 +721,7 @@ def _generate_plots(
 
         # Get precip data (from bundle or fallback training parquet)
         precip_data = field_weather_series.get(fid, {})
-        if not precip_data:
+        if not precip_data and not from_disk:
             precip_data = _load_fallback_weather(f_cfg)
 
         if not precip_data:
@@ -526,14 +768,16 @@ def _generate_plots(
         if fired_dates:
             ax.scatter(fired_dates, [0] * len(fired_dates), color="crimson", marker="^", s=70, zorder=6, label="as_of: Mid-Season Trigger FIRED")
 
-        ax.set_title(f"Replay Backtest: {fid} ({district.capitalize()} — {role.replace('_', ' ').capitalize()})", fontsize=11, fontweight="bold")
+        plot_kind = "Disk Trigger Replay" if from_disk else "Replay Backtest"
+        ax.set_title(f"{plot_kind}: {fid} ({district.capitalize()} — {role.replace('_', ' ').capitalize()})", fontsize=11, fontweight="bold")
         ax.set_ylabel("Precipitation (mm)")
         ax.set_xlabel("Date")
         ax.legend(loc="upper right", fontsize=8)
         ax.grid(True, linestyle="--", alpha=0.4)
         fig.tight_layout()
 
-        out_img = plots_dir / f"{fid}.png"
+        plot_suffix = "_disk" if from_disk else ""
+        out_img = plots_dir / f"{fid}{plot_suffix}.png"
         fig.savefig(out_img, dpi=120)
         plt.close(fig)
         log.info("Saved backtest plot: %s", out_img)
@@ -556,9 +800,18 @@ def main() -> None:
         action="store_true",
         help="Run without outgoing network requests, relying on disk cache.",
     )
+    parser.add_argument(
+        "--from-disk",
+        action="store_true",
+        help="Replay triggers only from archived weather parquet without network calls.",
+    )
     args = parser.parse_args()
 
-    run_backtest(field_ids=args.fields, cache_only=args.cache_only)
+    run_backtest(
+        field_ids=args.fields,
+        cache_only=args.cache_only,
+        from_disk=args.from_disk,
+    )
 
 
 if __name__ == "__main__":

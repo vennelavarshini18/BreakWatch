@@ -10,17 +10,28 @@ All tests use a stubbed pipeline (test-only fakes):
 
 from __future__ import annotations
 
+import json
+
 from tqdm import tqdm
+
 tqdm.monitor_interval = 0
 
 from datetime import date, timedelta
 from unittest.mock import MagicMock, patch
 
-import pytest
+import pandas as pd
 
-from contracts import Climatology, Evidence, FieldInput, FusedState, ObsBundle, WeatherDay
+from contracts import (
+    Climatology,
+    Evidence,
+    FieldInput,
+    FusedState,
+    ObsBundle,
+    Trigger,
+    WeatherDay,
+)
+from ml import backtest
 from ml.backtest import run_single_replay_step
-
 
 # ---------------------------------------------------------------------------
 # Test Helpers: Synthetic ObsBundle Generator
@@ -261,3 +272,133 @@ def test_backtest_fusion_available_path():
                 assert res["risk_level"] == "watch"
                 assert res["forecast_status"] == "validated"
                 assert res["forecast_p50"] == 0.15
+
+
+def test_disk_weather_loader_reads_only_rows_through_as_of(tmp_path, monkeypatch):
+    """Disk loader preserves archived values, source quality, and the as_of cutoff."""
+    weather_dir = tmp_path / "weather"
+    weather_dir.mkdir()
+    pd.DataFrame(
+        [
+            {
+                "date": "2024-08-01",
+                "precip_mm": 1.25,
+                "et0_mm": 4.0,
+                "tmax_c": 31.0,
+                "sm_shallow": 0.2,
+                "sm_root": 0.3,
+            },
+            {
+                "date": "2024-08-02",
+                "precip_mm": 9.0,
+                "et0_mm": 5.0,
+                "tmax_c": 32.0,
+                "sm_shallow": 0.21,
+                "sm_root": 0.31,
+            },
+        ]
+    ).to_parquet(weather_dir / "pt_test.parquet", index=False)
+    monkeypatch.setattr(backtest, "WEATHER_DIR", weather_dir)
+
+    weather_days, evidence = backtest._load_disk_weather("pt_test", date(2024, 8, 1))
+
+    assert len(weather_days) == 1
+    assert weather_days[0].day == date(2024, 8, 1)
+    assert weather_days[0].precip_mm == 1.25
+    assert weather_days[0].is_forecast is False
+    assert weather_days[0].evidence_id == evidence[0].id
+    assert evidence[0].quality == "cached"
+    assert evidence[0].source == "disk archive (Open-Meteo ERA5 download)"
+
+
+def test_from_disk_mode_writes_separate_trigger_only_outputs(tmp_path, monkeypatch):
+    """Disk mode uses the stubbed archive loader and writes disk-specific outputs."""
+    as_of = date(2024, 8, 1)
+    fields = [
+        {
+            "id": "field_disk_test",
+            "role": "dry_spell",
+            "district": "medak",
+            "polygon": {
+                "type": "Polygon",
+                "coordinates": [[[78, 17], [78.1, 17], [78.1, 17.1], [78, 17.1], [78, 17]]],
+            },
+            "as_of_dates": [as_of.isoformat()],
+            "selection_justification": {
+                "coincides_with_training_point": "pt_test",
+            },
+        }
+    ]
+    fields_path = tmp_path / "test_fields.json"
+    fields_path.write_text(json.dumps(fields), encoding="utf-8")
+    monkeypatch.setattr(backtest, "TEST_FIELDS_JSON", fields_path)
+
+    evidence = Evidence(
+        id="disk_test",
+        key="weather_daily_series",
+        value="1 day",
+        source="disk archive (Open-Meteo ERA5 download)",
+        fetched_at="2024-08-01T00:00:00Z",
+        quality="cached",
+    )
+    weather_days = [
+        WeatherDay(
+            day=as_of,
+            precip_mm=0.5,
+            is_forecast=False,
+            evidence_id=evidence.id,
+        )
+    ]
+    fired_trigger = Trigger(
+        id="mid_season_dry_spell",
+        name="Mid-Season Dry Spell (> 2 weeks rainless)",
+        fired=True,
+        detail="test-only trigger stub",
+        chunk_id="",
+    )
+    with (
+        patch.object(backtest, "_load_disk_weather", return_value=(weather_days, [evidence])) as loader,
+        patch("ml.triggers.check_triggers", return_value=[fired_trigger]) as check_triggers,
+        patch.object(backtest, "run_single_replay_step", side_effect=AssertionError("live replay called")),
+    ):
+        results, summary = backtest.run_backtest(
+            field_ids=[],
+            output_dir=tmp_path,
+            from_disk=True,
+        )
+
+    loader.assert_called_once_with("pt_test", as_of)
+    check_triggers.assert_called_once()
+    assert results.loc[0, "fusion_status"] == "fusion not run in --from-disk mode"
+    assert results.loc[0, "sources_used"] == "disk archive (Open-Meteo ERA5 download)"
+    assert "trigger-only replay on archived weather" in summary
+    assert "already 15 days long" in summary
+    assert "not an early forecast" in summary
+    assert "No stress result or lead-time result exists" in summary
+    assert (tmp_path / "backtest_results_disk.csv").is_file()
+    assert (tmp_path / "backtest_summary_disk.md").is_file()
+    assert (tmp_path / "backtest_plots" / "field_disk_test_disk.png").is_file()
+
+
+def test_from_disk_missing_weather_file_is_recorded_and_skipped():
+    """A missing archive is reported without invoking the trigger checker."""
+    field_cfg = {
+        "id": "field_missing_archive",
+        "role": "control",
+        "district": "medak",
+        "polygon": {"type": "Polygon", "coordinates": [[[78, 17], [78.1, 17], [78.1, 17.1], [78, 17.1], [78, 17]]]},
+        "selection_justification": {"coincides_with_training_point": "pt_missing"},
+    }
+
+    with (
+        patch.object(backtest, "_load_disk_weather", side_effect=FileNotFoundError),
+        patch("ml.triggers.check_triggers") as check_triggers,
+    ):
+        result = backtest.run_single_disk_replay_step(field_cfg, date(2024, 8, 1))
+
+    assert result["observation_status"] == "missing_weather_file: pt_missing.parquet"
+    assert result["events"] == ["weather_file_missing:pt_missing.parquet"]
+    assert result["fusion_status"] == "fusion not run in --from-disk mode"
+    assert result["p_stress"] is None
+    assert result["forecast_p50"] is None
+    check_triggers.assert_not_called()

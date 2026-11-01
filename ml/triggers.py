@@ -19,9 +19,8 @@ Both rules are tied to the chunk_id of the ICAR contingency plan for the field's
 from __future__ import annotations
 
 import math
-from datetime import date, timedelta
+from datetime import timedelta
 from functools import lru_cache
-from typing import Optional
 
 import pandas as pd
 
@@ -112,29 +111,53 @@ def check_triggers(bundle: ObsBundle) -> list[Trigger]:
         run_length, run_start, run_end = 0, None, None
 
     # 5. Create Evidence via common/ledger.py
+    weather_evidence_ids = {weather.evidence_id for weather in bundle.weather_daily}
+    weather_evidence = {
+        evidence.id: evidence
+        for evidence in bundle.evidence
+        if evidence.id in weather_evidence_ids
+    }
+    if bundle.weather_daily:
+        evidence_to_check = list(weather_evidence.values())
+        cached_weather = (
+            weather_evidence_ids.issubset(weather_evidence)
+            and bool(evidence_to_check)
+            and all(evidence.quality == "cached" for evidence in evidence_to_check)
+        )
+    else:
+        evidence_to_check = bundle.evidence
+        cached_weather = bool(evidence_to_check) and all(
+            evidence.quality == "cached" for evidence in evidence_to_check
+        )
+    if cached_weather:
+        evidence_source = evidence_to_check[0].source
+    else:
+        evidence_source = "open-meteo"
+    evidence_quality = "cached" if cached_weather else "live"
+
     ev_len = ledger_add(
         "dry_spell_run_length",
         run_length,
         unit="days",
-        source="open-meteo",
+        source=evidence_source,
         obs_date=as_of,
-        quality="live",
+        quality=evidence_quality,
         note="consecutive days with precip < 2.5mm ending on as_of",
     )
     ev_start = ledger_add(
         "dry_spell_run_start",
         str(run_start) if run_start else "none",
-        source="open-meteo",
+        source=evidence_source,
         obs_date=run_start or as_of,
-        quality="live",
+        quality=evidence_quality,
         note="start date of consecutive dry run",
     )
     ev_end = ledger_add(
         "dry_spell_run_end",
         str(run_end) if run_end else "none",
-        source="open-meteo",
+        source=evidence_source,
         obs_date=run_end or as_of,
-        quality="live",
+        quality=evidence_quality,
         note="end date of consecutive dry run",
     )
 
@@ -232,4 +255,3 @@ def check_triggers(bundle: ObsBundle) -> list[Trigger]:
     )
 
     return triggers
-
