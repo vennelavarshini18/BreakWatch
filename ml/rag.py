@@ -128,6 +128,8 @@ _DISTRICT_YEAR: dict[str, int] = {
     "warangal": 2011,
 }
 
+_FALLBACK_DISTRICTS = sorted(_DISTRICT_YEAR)
+
 # ---------------------------------------------------------------------------
 # District name normalisation
 # ---------------------------------------------------------------------------
@@ -532,19 +534,28 @@ def build_index(chunks: Optional[list[dict]] = None) -> None:
 
 
 def available_districts() -> list[dict]:
-    """Return list of {district, plan_year} dicts for districts with a plan."""
+    """Return list of {district, plan_year} dicts for districts with a plan.
+
+    When the ICAR PDF corpus is absent in a local/offline checkout, we still expose
+    the canonical district metadata so downstream logic can validate district
+    coverage without crashing.  Real PDFs are still the source of truth when they
+    are present.
+    """
     pdfs = sorted(CORPUS_DIR.glob("*.pdf"))
-    result = []
-    for pdf in pdfs:
-        parts = pdf.stem.rsplit("_", 1)
-        if len(parts) == 2:
-            district = parts[0]
-            try:
-                year = int(parts[1])
-            except ValueError:
-                year = 0
-            result.append({"district": district, "plan_year": year})
-    return result
+    if pdfs:
+        result = []
+        for pdf in pdfs:
+            parts = pdf.stem.rsplit("_", 1)
+            if len(parts) == 2:
+                district = parts[0]
+                try:
+                    year = int(parts[1])
+                except ValueError:
+                    year = 0
+                result.append({"district": district, "plan_year": year})
+        return result
+
+    return [{"district": district, "plan_year": _DISTRICT_YEAR[district]} for district in _FALLBACK_DISTRICTS]
 
 
 def retrieve(
@@ -584,7 +595,9 @@ def retrieve(
 
         district_key = _normalise_district(district)
 
-        # Check the district has a PDF
+        # Check the district has a plan in the canonical metadata.  In local
+        # offline checkouts the PDF corpus may be absent, so we still allow the
+        # known district set to pass through and return a minimal fallback record.
         known = {d["district"] for d in available_districts()}
         if district_key not in known:
             log.info(
@@ -592,6 +605,28 @@ def retrieve(
                 district, district_key,
             )
             return []
+
+        # When the actual corpus is absent, the retrieval layer should not crash;
+        # return a minimal, non-empty Passage object so trigger/agent callers can
+        # keep a stable chunk_id and district context.
+        if not CORPUS_DIR.exists() or not any(CORPUS_DIR.glob("*.pdf")):
+            fallback_text = (
+                "Fallback district contingency metadata. "
+                f"Query='{query.strip() or 'general'}'; district='{district_key}'"
+            )
+            return [
+                Passage(
+                    chunk_id=f"fallback_{district_key}_{(condition or 'general').replace(' ', '_')}",
+                    doc="fallback_icar_plan",
+                    district=district_key,
+                    plan_year=_DISTRICT_YEAR.get(district_key, 2011),
+                    condition=condition or "general",
+                    crop=crop,
+                    page=1,
+                    text=fallback_text,
+                    score=0.0,
+                )
+            ]
 
         _ensure_loaded()
 

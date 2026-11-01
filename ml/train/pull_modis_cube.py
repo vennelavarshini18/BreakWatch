@@ -91,10 +91,25 @@ def save_manifest(manifest: dict[str, Any]) -> None:
 
 
 def eligible_points() -> list[dict]:
-    """Return points that have a completed weather parquet."""
+    """Return points that have a completed weather parquet, ordered round-robin by district."""
     pts = json.loads(TRAIN_POINTS_JSON.read_text())
     done_ids = {p.stem for p in WEATHER_DIR.glob("*.parquet")}
-    return [p for p in pts if p["id"] in done_ids]
+    eligible = [p for p in pts if p["id"] in done_ids]
+
+    # Group points by district preserving original file order
+    from collections import defaultdict, deque
+    by_district: dict[str, list[dict]] = defaultdict(list)
+    for p in eligible:
+        by_district[p.get("district", "Unknown")].append(p)
+
+    # Interleave round-robin across districts: one point per district per round
+    ordered: list[dict] = []
+    queues = [deque(pts_list) for pts_list in by_district.values()]
+    while any(queues):
+        for q in queues:
+            if q:
+                ordered.append(q.popleft())
+    return ordered
 
 
 def _stac_search_all(
@@ -328,6 +343,21 @@ def main() -> None:
         points = points[: args.limit]
         log.info("Limited to %d points by --limit", len(points))
 
+    # Track completed districts across points
+    from collections import Counter
+    dist_total = Counter(p.get("district", "?") for p in points)
+    dist_done = Counter()
+    for p in points:
+        pid = p["id"]
+        dist = p.get("district", "?")
+        if manifest.get(pid) == "done" or (MODIS_DIR / f"{pid}.parquet").exists():
+            dist_done[dist] += 1
+
+    def completed_districts() -> list[str]:
+        return sorted([d for d, tot in dist_total.items() if dist_done[d] >= tot])
+
+    log.info("Districts completed so far (%d/%d): %s", len(completed_districts()), len(dist_total), completed_districts())
+
     done = skipped = failed = 0
     for i, pt in enumerate(points, 1):
         pid = pt["id"]
@@ -355,6 +385,9 @@ def main() -> None:
             if out_path.exists():
                 manifest[pid] = "done"
                 done += 1
+                dist_done[dist] += 1
+                comp = completed_districts()
+                log.info("Districts completed so far (%d/%d): %s", len(comp), len(dist_total), comp)
             else:
                 manifest[pid] = "no_records"
                 failed += 1

@@ -1,7 +1,78 @@
 {
   "name": "BreakWatch model card",
   "version": "0.1",
-  "status": "placeholder",
-  "training_window": "2015-2025",
-  "notes": "This file is committed as a reference for model metadata and will be replaced with the trained asset during later stages."
+  "status": "trained",
+  "training_window": "2015-2020",
+  "notes": "This file is committed as a reference for model metadata and will be replaced with the trained asset during later stages.",
+  "common_version": "1",
+  "feature_names": [
+    "rain_deficit_14d_mm",
+    "days_since_rain_gt_2p5mm",
+    "sm_shallow_pctl",
+    "sm_root_pctl",
+    "ndvi_z",
+    "ndvi_z_slope_3comp",
+    "et0_sum_14d",
+    "tmax_mean_7d",
+    "doy_sin",
+    "doy_cos"
+  ],
+  "horizon_days": 14,
+  "conformal_q": 1.010664,
+  "split_years": {
+    "train": [
+      2015,
+      2020
+    ],
+    "calib": [
+      2021,
+      2022
+    ],
+    "test": [
+      2023,
+      2025
+    ]
+  },
+  "target_rule": "Weekly Monday samples t in 2015-2025. Target = NDVI-z at t+14d from linear interpolation of z-scores of quality-OK MODIS composites between their END dates. Event = target_z <= -1.0. Samples dropped if ndvi_z feature is None or target cannot be formed.",
+  "districts_used": [
+    "Adilabad",
+    "Hyderabad",
+    "Karimnagar"
+  ],
+  "n_points": 12,
+  "n_rows_train": 1031,
+  "n_rows_calib": 437,
+  "n_rows_test": 618,
+  "seasons": {
+    "kharif": {
+      "n": 125,
+      "mae_model": 0.759614,
+      "mae_persistence": 0.642376,
+      "mae_climatology": 1.25123,
+      "skill": -0.182506,
+      "coverage_80pct": 0.68,
+      "auroc": 0.658537,
+      "validated": false
+    },
+    "rabi": {
+      "n": 270,
+      "mae_model": 0.695115,
+      "mae_persistence": 0.699447,
+      "mae_climatology": 0.658702,
+      "skill": 0.006195,
+      "coverage_80pct": 0.748148,
+      "auroc": 0.7618,
+      "validated": false
+    },
+    "summer": {
+      "n": 223,
+      "mae_model": 0.690396,
+      "mae_persistence": 0.775146,
+      "mae_climatology": 0.937672,
+      "skill": 0.109334,
+      "coverage_80pct": 0.757848,
+      "auroc": null,
+      "validated": true
+    }
+  }
 }

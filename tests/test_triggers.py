@@ -8,9 +8,9 @@ Synthetic arrays are used and explicitly marked as test-only.
 from __future__ import annotations
 
 from datetime import date, timedelta
-import pytest
+from unittest.mock import patch
 
-from contracts import FieldInput, ObsBundle, WeatherDay
+from contracts import Evidence, FieldInput, ObsBundle, WeatherDay
 from ml.triggers import check_triggers
 
 
@@ -170,3 +170,35 @@ def test_unknown_district_returns_fired_false_no_invented_chunk_id():
         assert t.chunk_id == ""
         assert "No ICAR plan exists" in t.detail
 
+
+def test_cached_weather_provenance_is_preserved_in_trigger_evidence():
+    """Trigger evidence derived from an archived bundle remains marked cached."""
+    as_of = date(2026, 8, 15)
+    weather = _make_weather_days(as_of, [0.0] * 20)
+    evidence_id = "disk_weather_test"
+    weather = [
+        item.model_copy(update={"evidence_id": evidence_id})
+        for item in weather
+    ]
+    source = "disk archive (Open-Meteo ERA5 download)"
+    bundle = _make_bundle(as_of, weather, district="Unknown")
+    bundle.evidence.append(
+        Evidence(
+            id=evidence_id,
+            key="weather_daily_series",
+            value="20 days",
+            source=source,
+            fetched_at="2026-08-15T00:00:00Z",
+            quality="cached",
+        )
+    )
+
+    with patch("ml.rag.available_districts", return_value=[]):
+        check_triggers(bundle)
+
+    trigger_evidence = [
+        item for item in bundle.evidence if item.key.startswith("dry_spell_run_")
+    ]
+    assert len(trigger_evidence) == 3
+    assert all(item.quality == "cached" for item in trigger_evidence)
+    assert all(item.source == source for item in trigger_evidence)
