@@ -3,6 +3,7 @@
 __pycache__/
 data/cache/
 data/train_raw/
+data/train_raw/features/
 data/model/chroma/
 *.parquet
 data/corpus/icar/*.pdf

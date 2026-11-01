@@ -1,7 +1,77 @@
 {
   "name": "BreakWatch model card",
   "version": "0.1",
-  "status": "placeholder",
-  "training_window": "2015-2025",
-  "notes": "This file is committed as a reference for model metadata and will be replaced with the trained asset during later stages."
+  "status": "trained",
+  "training_window": "2015-2020",
+  "notes": "This file is committed as a reference for model metadata and will be replaced with the trained asset during later stages.",
+  "common_version": "1",
+  "feature_names": [
+    "rain_deficit_14d_mm",
+    "days_since_rain_gt_2p5mm",
+    "sm_shallow_pctl",
+    "sm_root_pctl",
+    "ndvi_z",
+    "ndvi_z_slope_3comp",
+    "et0_sum_14d",
+    "tmax_mean_7d",
+    "doy_sin",
+    "doy_cos"
+  ],
+  "horizon_days": 14,
+  "conformal_q": 0.964435,
+  "split_years": {
+    "train": [
+      2015,
+      2020
+    ],
+    "calib": [
+      2021,
+      2022
+    ],
+    "test": [
+      2023,
+      2025
+    ]
+  },
+  "target_rule": "Weekly Monday samples t in 2015-2025. Target = NDVI-z at t+14d from linear interpolation of z-scores of quality-OK MODIS composites between their END dates. Event = target_z <= -1.0. Samples dropped if ndvi_z feature is None or target cannot be formed.",
+  "districts_used": [
+    "Adilabad",
+    "Hyderabad"
+  ],
+  "n_points": 10,
+  "n_rows_train": 784,
+  "n_rows_calib": 345,
+  "n_rows_test": 497,
+  "seasons": {
+    "kharif": {
+      "n": 98,
+      "mae_model": 0.793923,
+      "mae_persistence": 0.649784,
+      "mae_climatology": 1.321695,
+      "skill": -0.221825,
+      "coverage_80pct": 0.663265,
+      "auroc": 0.666667,
+      "validated": false
+    },
+    "rabi": {
+      "n": 220,
+      "mae_model": 0.624104,
+      "mae_persistence": 0.588663,
+      "mae_climatology": 0.59248,
+      "skill": -0.060206,
+      "coverage_80pct": 0.768182,
+      "auroc": 0.80425,
+      "validated": false
+    },
+    "summer": {
+      "n": 179,
+      "mae_model": 0.692544,
+      "mae_persistence": 0.654048,
+      "mae_climatology": 0.85239,
+      "skill": -0.058858,
+      "coverage_80pct": 0.743017,
+      "auroc": null,
+      "validated": false
+    }
+  }
 }
